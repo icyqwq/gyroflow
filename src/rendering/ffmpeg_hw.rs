@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright © 2021-2022 Adrian <adrian.eddy at gmail>
 
-use ffmpeg_next::{ ffi, encoder, Stream };
+use ffmpeg_next::{ ffi, format, codec, encoder };
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -15,8 +15,8 @@ pub struct HWDevice {
     type_: DeviceType,
     device_ref: *mut ffi::AVBufferRef,
 
-    pub hw_formats: Vec<ffi::AVPixelFormat>,
-    pub sw_formats: Vec<ffi::AVPixelFormat>,
+    pub hw_formats: Vec<format::Pixel>,
+    pub sw_formats: Vec<format::Pixel>,
     pub min_size: (i32, i32),
     pub max_size: (i32, i32)
 }
@@ -93,19 +93,19 @@ pub fn supported_gpu_backends() -> Vec<String> {
     ret
 }
 
-pub unsafe fn pix_formats_to_vec(formats: *const ffi::AVPixelFormat) -> Vec<ffi::AVPixelFormat> {
+pub unsafe fn pix_formats_to_vec(formats: *const ffi::AVPixelFormat) -> Vec<format::Pixel> {
     let mut ret = Vec::new();
     for i in 0..100 {
         let p = *formats.offset(i);
         if p == ffi::AVPixelFormat::AV_PIX_FMT_NONE {
             break;
         }
-        ret.push(p);
+        ret.push(p.into());
     }
     ret
 }
 
-pub fn init_device_for_decoding(index: usize, codec: *mut ffi::AVCodec, stream: &mut Stream) -> Result<(usize, ffi::AVHWDeviceType, String, Option<ffi::AVPixelFormat>), super::FFmpegError> {
+pub fn init_device_for_decoding(index: usize, codec: *const ffi::AVCodec, decoder_ctx: &mut codec::context::Context) -> Result<(usize, ffi::AVHWDeviceType, String, Option<ffi::AVPixelFormat>), super::FFmpegError> {
     for i in index..20 {
         unsafe {
             let config = ffi::avcodec_get_hw_config(codec, i as i32);
@@ -125,7 +125,6 @@ pub fn init_device_for_decoding(index: usize, codec: *mut ffi::AVCodec, stream: 
                 }
             }
             if let Some(dev) = devices.get(&type_) {
-                let mut decoder_ctx = stream.codec().decoder();
                 (*decoder_ctx.as_mut_ptr()).hw_device_ctx = dev.add_ref();
                 return Ok((i, type_, dev.name(), Some((*config).pix_fmt)));
             }
@@ -143,7 +142,7 @@ pub fn find_working_encoder(encoders: &[(&'static str, bool)]) -> (&'static str,
             
             for i in 0..20 {
                 unsafe {
-                    let type_ = /*if !x.0.contains("videotoolbox") */{
+                    let type_ = if !x.0.contains("videotoolbox") {
                         let config = ffi::avcodec_get_hw_config(enc.as_mut_ptr(), i);
                         if config.is_null() {
                             println!("config is null {}", x.0);
@@ -160,9 +159,9 @@ pub fn find_working_encoder(encoders: &[(&'static str, bool)]) -> (&'static str,
                             }
                         }
                         type_
-                    }/* else {
+                    } else {
                         ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX
-                    }*/;
+                    };
                     let mut devices = DEVICES.lock();
                     if let Some(dev) = devices.get_mut(&type_) {
                         let mut constraints = ffi::av_hwdevice_get_hwframe_constraints(dev.as_mut_ptr(), std::ptr::null());
@@ -189,7 +188,7 @@ pub fn find_working_encoder(encoders: &[(&'static str, bool)]) -> (&'static str,
     (x.0, x.1, None)
 }
 
-pub unsafe fn get_transfer_formats_from_gpu(frame: *mut ffi::AVFrame) -> Vec<ffi::AVPixelFormat> {
+pub unsafe fn get_transfer_formats_from_gpu(frame: *mut ffi::AVFrame) -> Vec<format::Pixel> {
     let mut formats = std::ptr::null_mut();
     if !frame.is_null() && !(*frame).hw_frames_ctx.is_null() {
         ffi::av_hwframe_transfer_get_formats((*frame).hw_frames_ctx, ffi::AVHWFrameTransferDirection::AV_HWFRAME_TRANSFER_DIRECTION_FROM, &mut formats, 0);
@@ -200,7 +199,7 @@ pub unsafe fn get_transfer_formats_from_gpu(frame: *mut ffi::AVFrame) -> Vec<ffi
         pix_formats_to_vec(formats)
     }
 }
-pub unsafe fn get_transfer_formats_to_gpu(frame: *mut ffi::AVFrame) -> Vec<ffi::AVPixelFormat> {
+pub unsafe fn get_transfer_formats_to_gpu(frame: *mut ffi::AVFrame) -> Vec<format::Pixel> {
     let mut formats = std::ptr::null_mut();
     if !frame.is_null() && !(*frame).hw_frames_ctx.is_null() {
         ffi::av_hwframe_transfer_get_formats((*frame).hw_frames_ctx, ffi::AVHWFrameTransferDirection::AV_HWFRAME_TRANSFER_DIRECTION_TO, &mut formats, 0);
@@ -212,33 +211,21 @@ pub unsafe fn get_transfer_formats_to_gpu(frame: *mut ffi::AVFrame) -> Vec<ffi::
     }
 }
 
-pub fn initialize_hwframes_context(encoder_ctx: *mut ffi::AVCodecContext, _frame_ctx: *mut ffi::AVFrame, type_: DeviceType, pixel_format: ffi::AVPixelFormat, size: (u32, u32)) -> Result<(), ()> {
+pub fn initialize_hwframes_context(encoder_ctx: *mut ffi::AVCodecContext, _frame_ctx: *mut ffi::AVFrame, type_: DeviceType, _pixel_format: ffi::AVPixelFormat, _size: (u32, u32)) -> Result<(), ()> {
     let mut devices = DEVICES.lock();
     if let Some(dev) = devices.get_mut(&type_) {
         unsafe {
-            if (*encoder_ctx).hw_frames_ctx.is_null() {
-                let mut hw_frames_ref = ffi::av_hwframe_ctx_alloc(dev.as_mut_ptr());
-                if hw_frames_ref.is_null() {
-                    super::append_log(&format!("Failed to create GPU frame context {:?}.\n", type_));
-                    return Err(());
-                }
-                (*encoder_ctx).hw_frames_ctx = ffi::av_buffer_ref(hw_frames_ref);
-                ffi::av_buffer_unref(&mut hw_frames_ref);
-            } else {
-                log::debug!("hwframes already exists");
+            if (*encoder_ctx).hw_device_ctx.is_null() {
+                (*encoder_ctx).hw_device_ctx = dev.add_ref();
+                log::debug!("Setting hw_device_ctx {:?}", (*encoder_ctx).hw_device_ctx);
+            }
+            return Ok(());
+            /*if dev.sw_formats.is_empty() && !(*encoder_ctx).codec.is_null() {
+                dev.sw_formats = pix_formats_to_vec((*(*encoder_ctx).codec).pix_fmts);
+                log::debug!("Setting codec formats: {:?}", dev.sw_formats);
             }
 
-            dbg!(&dev.hw_formats);
-            let mut frames_ctx_ref = (*encoder_ctx).hw_frames_ctx;
-            if dev.hw_formats.is_empty() && type_ == ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX {
-                dev.hw_formats.push(ffi::AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX);
-            }
-            if dev.hw_formats.is_empty() && type_ == ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA {
-                dev.hw_formats.push(ffi::AVPixelFormat::AV_PIX_FMT_D3D11);
-            }
-            if dev.hw_formats.is_empty() && type_ == ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2 {
-                dev.hw_formats.push(ffi::AVPixelFormat::AV_PIX_FMT_DXVA2_VLD);
-            }
+            dbg!(&dev.sw_formats);
             dbg!(&dev.hw_formats);
             if !dev.hw_formats.is_empty() {
                 let target_format = {
@@ -264,6 +251,20 @@ pub fn initialize_hwframes_context(encoder_ctx: *mut ffi::AVCodecContext, _frame
 
                 if target_format != ffi::AVPixelFormat::AV_PIX_FMT_NONE {
                     let hw_format = *dev.hw_formats.first().unwrap(); // Safe because we check !is_empty() above
+
+                    if (*encoder_ctx).hw_frames_ctx.is_null() {
+                        let mut hw_frames_ref = ffi::av_hwframe_ctx_alloc(dev.as_mut_ptr());
+                        if hw_frames_ref.is_null() {
+                            super::append_log(&format!("Failed to create GPU frame context {:?}.\n", type_));
+                            return Err(());
+                        }
+                        (*encoder_ctx).hw_frames_ctx = ffi::av_buffer_ref(hw_frames_ref);
+                        ffi::av_buffer_unref(&mut hw_frames_ref);
+                    } else {
+                        log::debug!("hwframes already exists");
+                    }
+                    let mut frames_ctx_ref = (*encoder_ctx).hw_frames_ctx;
+
                     let mut frames_ctx = (*frames_ctx_ref).data as *mut ffi::AVHWFramesContext;
                     dbg!(&(*frames_ctx).format);
                     dbg!(&(*frames_ctx).sw_format);
@@ -286,9 +287,8 @@ pub fn initialize_hwframes_context(encoder_ctx: *mut ffi::AVCodecContext, _frame
                     dbg!(&(*frames_ctx).format);
                     dbg!(&(*frames_ctx).sw_format);
                     (*encoder_ctx).pix_fmt = (*frames_ctx).format;
-                
                 }
-            }
+            }*/
         }
     } else {
         log::warn!("DEVICES didn't have {:?}", type_);
@@ -296,12 +296,12 @@ pub fn initialize_hwframes_context(encoder_ctx: *mut ffi::AVCodecContext, _frame
     Ok(())
 }
 
-pub fn find_best_matching_codec(codec: ffi::AVPixelFormat, supported: &[ffi::AVPixelFormat]) -> ffi::AVPixelFormat {
-    if supported.is_empty() { return ffi::AVPixelFormat::AV_PIX_FMT_NONE; }
+pub fn find_best_matching_codec(codec: format::Pixel, supported: &[format::Pixel]) -> format::Pixel {
+    if supported.is_empty() { return format::Pixel::None; }
 
     if supported.contains(&codec) { return codec; }
-    if codec == ffi::AVPixelFormat::AV_PIX_FMT_P010LE && supported.contains(&ffi::AVPixelFormat::AV_PIX_FMT_YUV420P10LE) { return ffi::AVPixelFormat::AV_PIX_FMT_YUV420P10LE; }
-    if codec == ffi::AVPixelFormat::AV_PIX_FMT_NV12   && supported.contains(&ffi::AVPixelFormat::AV_PIX_FMT_YUV420P)     { return ffi::AVPixelFormat::AV_PIX_FMT_YUV420P; }
+    if codec == format::Pixel::P010LE && supported.contains(&format::Pixel::YUV420P10LE) { return format::Pixel::YUV420P10LE; }
+    if codec == format::Pixel::NV12   && supported.contains(&format::Pixel::YUV420P)     { return format::Pixel::YUV420P; }
 
     super::append_log(&format!("No matching codec, we need {:?} and supported are: {:?}\n", codec, supported));
 

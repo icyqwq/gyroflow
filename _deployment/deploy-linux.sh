@@ -1,9 +1,9 @@
 #!/bin/bash
 
-: "${PROJECT_DIR:=/home/eddy/gyroflow}"
+: "${PROJECT_DIR:=$(readlink -f $(dirname $(readlink -f $0))/..)}"
 : "${CARGO_TARGET:=$PROJECT_DIR/target/deploy}"
 : "${QT_DIR:=$PROJECT_DIR/ext/6.2.3/gcc_64}"
-: "${FFMPEG_DIR:=$PROJECT_DIR/ext/ffmpeg-4.4-linux-clang-gpl-lite}"
+: "${FFMPEG_DIR:=$PROJECT_DIR/ext/ffmpeg-5.0-linux-clang-gpl-lite}"
 : "${VCPKG_ROOT:=$PROJECT_DIR/ext/vcpkg}"
 
 if [ "$1" == "build-docker" ]; then
@@ -156,18 +156,18 @@ cp -f $QT_DIR/plugins/xcbglintegrations/*.so                                    
 cp -f "$CARGO_TARGET/libmdk.so.0"                      "$TARGET/lib/"
 #cp -f "$CARGO_TARGET/libffmpeg.so.5"                  "$TARGET/"
 
-cp -f "$FFMPEG_DIR/lib/libavcodec.so.58"               "$TARGET/lib/"
-cp -f "$FFMPEG_DIR/lib/libavfilter.so.7"               "$TARGET/lib/"
-cp -f "$FFMPEG_DIR/lib/libavformat.so.58"              "$TARGET/lib/"
-cp -f "$FFMPEG_DIR/lib/libavutil.so.56"                "$TARGET/lib/"
-cp -f "$FFMPEG_DIR/lib/libswresample.so.3"             "$TARGET/lib/"
-cp -f "$FFMPEG_DIR/lib/libswscale.so.5"                "$TARGET/lib/"
-cp -f "$FFMPEG_DIR/lib/amd64/libavcodec.so.58"         "$TARGET/lib/"
-cp -f "$FFMPEG_DIR/lib/amd64/libavfilter.so.7"         "$TARGET/lib/"
-cp -f "$FFMPEG_DIR/lib/amd64/libavformat.so.58"        "$TARGET/lib/"
-cp -f "$FFMPEG_DIR/lib/amd64/libavutil.so.56"          "$TARGET/lib/"
-cp -f "$FFMPEG_DIR/lib/amd64/libswresample.so.3"       "$TARGET/lib/"
-cp -f "$FFMPEG_DIR/lib/amd64/libswscale.so.5"          "$TARGET/lib/"
+cp -f "$FFMPEG_DIR/lib/libavcodec.so.59"               "$TARGET/lib/"
+cp -f "$FFMPEG_DIR/lib/libavfilter.so.8"               "$TARGET/lib/"
+cp -f "$FFMPEG_DIR/lib/libavformat.so.59"              "$TARGET/lib/"
+cp -f "$FFMPEG_DIR/lib/libavutil.so.57"                "$TARGET/lib/"
+cp -f "$FFMPEG_DIR/lib/libswresample.so.4"             "$TARGET/lib/"
+cp -f "$FFMPEG_DIR/lib/libswscale.so.6"                "$TARGET/lib/"
+cp -f "$FFMPEG_DIR/lib/amd64/libavcodec.so.59"         "$TARGET/lib/"
+cp -f "$FFMPEG_DIR/lib/amd64/libavfilter.so.8"         "$TARGET/lib/"
+cp -f "$FFMPEG_DIR/lib/amd64/libavformat.so.59"        "$TARGET/lib/"
+cp -f "$FFMPEG_DIR/lib/amd64/libavutil.so.57"          "$TARGET/lib/"
+cp -f "$FFMPEG_DIR/lib/amd64/libswresample.so.4"       "$TARGET/lib/"
+cp -f "$FFMPEG_DIR/lib/amd64/libswscale.so.6"          "$TARGET/lib/"
 
 cp -f "$CARGO_TARGET/gyroflow"                         "$TARGET/"
 strip "$TARGET/gyroflow"
@@ -179,7 +179,7 @@ tar -czf Gyroflow-linux64.tar.gz --transform 's!linux64!Gyroflow!' linux64
 
 # ---- Build AppImage ----
 export APP_DIR=$TARGET/../AppDir
-export APP_VERSION=1.0.0-rc2
+export APP_VERSION=1.0.0-rc4
 
 rm -rf $APP_DIR
 mkdir -p $APP_DIR/usr/share/icons

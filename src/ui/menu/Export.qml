@@ -17,10 +17,13 @@ MenuItem {
         codec.currentIndexChanged();
     }
 
+    property bool isOsx: Qt.platform.os == "osx";
+
     property var exportFormats: [
         { "name": "x264",          "max_size": [4096, 2160], "extension": ".mp4",      "gpu": true,  "audio": true,  "variants": [ ] },
         { "name": "x265",          "max_size": [8192, 4320], "extension": ".mp4",      "gpu": true,  "audio": true,  "variants": [ ] },
-        { "name": "ProRes",        "max_size": [8192, 4320], "extension": ".mov",      "gpu": false, "audio": true,  "variants": ["Proxy", "LT", "Standard", "HQ", "4444", "4444XQ"] },
+        { "name": "ProRes",        "max_size": [8192, 4320], "extension": ".mov",      "gpu": isOsx, "audio": true,  "variants": ["Proxy", "LT", "Standard", "HQ", "4444", "4444XQ"] },
+        { "name": "EXR Sequence",  "max_size": false,        "extension": "_%05d.exr", "gpu": false, "audio": false, "variants": [] },
         { "name": "PNG Sequence",  "max_size": false,        "extension": "_%05d.png", "gpu": false, "audio": false, "variants": ["8-bit", "16-bit"] },
     ];
 
@@ -57,15 +60,35 @@ MenuItem {
     property alias outBitrate: bitrate.value;
     property alias outGpu: gpu.checked;
     property alias outAudio: audio.checked;
+    property string overridePixelFormat: "";
     property string outCodecOptions: "";
 
     onOutWidthChanged: Qt.callLater(applyOutputSize);
     onOutHeightChanged: Qt.callLater(applyOutputSize);
 
-    Component.onCompleted: {
-        QT_TRANSLATE_NOOP("Export", "GPU accelerated encoder doesn't support this pixel format (%1).\nDo you want to convert to a different supported pixel format or keep the original one and render on the CPU?");
-        QT_TRANSLATE_NOOP("Export", "Render using CPU");
-        QT_TRANSLATE_NOOP("Export", "Cancel");
+    Connections {
+        target: controller;
+        function onConvert_format(format, supported) {
+            supported = supported.split(",").filter(v => !["CUDA", "D3D11", "BGRZ", "RGBZ", "VIDEOTOOLBOX", "DXVA2", "MEDIACODEC", "VULKAN", "OPENCL", "QSV"].includes(v));
+            let buttons = supported.map(f => ({
+                text: f,
+                clicked: () => {
+                    overridePixelFormat = f;
+                    window.renderBtn.render();
+                }
+            }));
+            buttons.push({
+                text: qsTr("Render using CPU"),
+                accent: true,
+                clicked: () => {
+                    gpu.checked = false;
+                    window.renderBtn.render();
+                }
+            });
+            buttons.push({ text: qsTr("Cancel") });
+
+            messageBox(Modal.Question, qsTr("GPU accelerated encoder doesn't support this pixel format (%1).\nDo you want to convert to a different supported pixel format or keep the original one and render on the CPU?").arg(format), buttons);
+        }
     }
 
     function applyOutputSize() {
@@ -109,8 +132,7 @@ MenuItem {
         function updateGpuStatus() {
             const format = exportFormats[currentIndex];
             gpu.enabled2 = format.gpu;
-            if ((format.name == "x264" && window.vidInfo.pixelFormat.includes("10 bit"))
-             || (window.vidInfo.pixelFormat.includes("422"))) {
+            if ((format.name == "x264" && window.vidInfo.pixelFormat.includes("10 bit"))) {
                 gpu.enabled2 = false;
             }
             gpu.checked = gpu.enabled2;
@@ -141,6 +163,7 @@ MenuItem {
                 id: outputWidth;
                 tooltip: qsTr("Width");
                 width: 60 * dpiScale;
+                intNoThousandSep: true;
                 onValueChanged: if (!preventChange2) root.updateOutputSize(true);
                 live: false;
             }
@@ -150,6 +173,7 @@ MenuItem {
                 id: outputHeight;
                 tooltip: qsTr("Height");
                 width: 60 * dpiScale;
+                intNoThousandSep: true;
                 onValueChanged: if (!preventChange2) root.updateOutputSize(false);
                 live: false;
             }
@@ -194,6 +218,7 @@ MenuItem {
         NumberField {
             id: bitrate;
             value: 0;
+            defaultValue: 20;
             unit: qsTr("Mbps");
             width: parent.width;
         }

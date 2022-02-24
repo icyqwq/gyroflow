@@ -3,6 +3,8 @@
 
 mod ffmpeg_audio;
 mod ffmpeg_video;
+mod ffmpeg_video_converter;
+mod audio_resampler;
 pub mod ffmpeg_processor;
 pub mod ffmpeg_hw;
 
@@ -47,6 +49,7 @@ pub fn set_gpu_type_from_name(name: &str) {
 
 pub fn get_possible_encoders(codec: &str, use_gpu: bool) -> Vec<(&'static str, bool)> { // -> (name, is_gpu)
     if codec.contains("PNG") || codec.contains("png") { return vec![("png", false)]; }
+    if codec.contains("EXR") || codec.contains("exr") { return vec![("exr", false)]; }
     
     let mut encoders = if use_gpu {
         match codec {
@@ -55,18 +58,14 @@ pub fn get_possible_encoders(codec: &str, use_gpu: bool) -> Vec<(&'static str, b
                 ("h264_videotoolbox", true),
                 #[cfg(any(target_os = "windows", target_os = "linux"))]
                 ("h264_nvenc",        true),
-                #[cfg(any(target_os = "windows", target_os = "linux"))]
-                ("nvenc",             true),
-                #[cfg(any(target_os = "windows", target_os = "linux"))]
-                ("nvenc_h264",        true),
                 #[cfg(target_os = "windows")]
                 ("h264_amf",          true),
-                #[cfg(target_os = "windows")]
-                ("h264_mf",           true),
                 #[cfg(target_os = "linux")]
                 ("h264_vaapi",        true),
                 #[cfg(any(target_os = "windows", target_os = "linux"))]
                 ("h264_qsv",          true),
+                #[cfg(target_os = "windows")]
+                ("h264_mf",           true),
                 #[cfg(target_os = "linux")]
                 ("h264_v4l2m2m",      true),
                 ("libx264",           false),
@@ -76,21 +75,23 @@ pub fn get_possible_encoders(codec: &str, use_gpu: bool) -> Vec<(&'static str, b
                 ("hevc_videotoolbox", true),
                 #[cfg(any(target_os = "windows", target_os = "linux"))]
                 ("hevc_nvenc",        true),
-                #[cfg(any(target_os = "windows", target_os = "linux"))]
-                ("nvenc_hevc",        true),
                 #[cfg(target_os = "windows")]
                 ("hevc_amf",          true),
-                #[cfg(target_os = "windows")]
-                ("hevc_mf",           true),
                 #[cfg(target_os = "linux")]
                 ("hevc_vaapi",        true),
                 #[cfg(any(target_os = "windows", target_os = "linux"))]
                 ("hevc_qsv",          true),
+                #[cfg(target_os = "windows")]
+                ("hevc_mf",           true),
                 #[cfg(target_os = "linux")]
                 ("hevc_v4l2m2m",      true),
                 ("libx265",           false),
             ],
-            "ProRes" => vec![("prores_ks", false)],
+            "ProRes" => vec![
+                #[cfg(any(target_os = "macos", target_os = "ios"))]
+                ("prores_videotoolbox", true),
+                ("prores_ks", false)
+            ],
             _        => vec![]
         }
     } else {
@@ -109,12 +110,15 @@ pub fn get_possible_encoders(codec: &str, use_gpu: bool) -> Vec<(&'static str, b
     if gpu_type != GpuType::AMD {
         encoders = encoders.into_iter().filter(|x| !x.0.contains("_amf")).collect();
     }
+    if gpu_type != GpuType::Intel {
+        encoders = encoders.into_iter().filter(|x| !x.0.contains("qsv")).collect();
+    }
     log::debug!("Possible encoders with {:?}: {:?}", gpu_type, encoders);
     encoders
 }
 
 pub fn render<T: PixelType, F>(stab: Arc<StabilizationManager<T>>, progress: F, video_path: &str, codec: &str, codec_options: &str, output_path: &str, trim_start: f64, trim_end: f64, 
-                               output_width: usize, output_height: usize, bitrate: f64, use_gpu: bool, audio: bool, gpu_decoder_index: i32, cancel_flag: Arc<AtomicBool>) -> Result<(), FFmpegError>
+                               output_width: usize, output_height: usize, bitrate: f64, use_gpu: bool, audio: bool, gpu_decoder_index: i32, pixel_format: &str, cancel_flag: Arc<AtomicBool>) -> Result<(), FFmpegError>
     where F: Fn((f64, usize, usize, bool)) + Send + Sync + Clone
 {
     log::debug!("ffmpeg_hw::supported_gpu_backends: {:?}", ffmpeg_hw::supported_gpu_backends());
@@ -124,11 +128,19 @@ pub fn render<T: PixelType, F>(stab: Arc<StabilizationManager<T>>, progress: F, 
     let total_frame_count = params.frame_count;
     let _fps = params.fps;
     let fps_scale = params.fps_scale;
+    let has_alpha = params.background[3] < 255.0;
 
     let duration_ms = params.duration_ms;
 
     let render_duration = params.duration_ms * trim_ratio;
     let render_frame_count = (total_frame_count as f64 * trim_ratio).round() as usize;
+
+    // Only use post-conversion processing when background is not opaque
+    let order = if params.background[3] < 255.0 {
+        ffmpeg_video::ProcessingOrder::PostConversion
+    } else {
+        ffmpeg_video::ProcessingOrder::PreConversion
+    };
 
     drop(params);
 
@@ -140,7 +152,8 @@ pub fn render<T: PixelType, F>(stab: Arc<StabilizationManager<T>>, progress: F, 
     proc.video.gpu_encoding = encoder.1;
     proc.video.hw_device_type = encoder.2;
     proc.video.codec_options.set("threads", "auto");
-    log::debug!("proc.video_codec: {:?}", &proc.video_codec);
+    proc.video.processing_order = order;
+    log::debug!("video_codec: {:?}, processing_order: {:?}", &proc.video_codec, proc.video.processing_order);
 
     if trim_start > 0.0 { proc.start_ms = Some(trim_start * duration_ms); }
     if trim_end   < 1.0 { proc.end_ms   = Some(trim_end   * duration_ms); }
@@ -153,15 +166,53 @@ pub fn render<T: PixelType, F>(stab: Arc<StabilizationManager<T>>, progress: F, 
                 proc.video.codec_options.set("profile", &format!("{}", profile));
                 proc.video.encoder_pixel_format = Some(pix_fmts[profile]);
             }
+            proc.video.clone_frames = true;
         }
         Some("png") => {
             if codec_options.contains("16-bit") {
-                proc.video.encoder_pixel_format = Some(Pixel::RGB48BE);
+                proc.video.encoder_pixel_format = Some(if has_alpha { Pixel::RGBA64BE } else { Pixel::RGB48BE });
             } else {
-                proc.video.encoder_pixel_format = Some(Pixel::RGB24);
+                proc.video.encoder_pixel_format = Some(if has_alpha { Pixel::RGBA } else { Pixel::RGB24 });
             }
+            proc.video.clone_frames = true;
+        }
+        Some("exr") => {
+            proc.video.clone_frames = true;
+            proc.video.codec_options.set("compression", "1"); // RLE compression
+            proc.video.codec_options.set("gamma", "1.0");
+            proc.video.encoder_pixel_format = Some(if has_alpha { Pixel::GBRAPF32LE } else { Pixel::GBRPF32LE });
+            /*Decoder options:
+                -layer             <string>     .D.V....... Set the decoding layer (default "")
+                -part              <int>        .D.V....... Set the decoding part (from 0 to INT_MAX) (default 0)
+                -gamma             <float>      .D.V....... Set the float gamma value when decoding (from 0.001 to FLT_MAX) (default 1)
+                -apply_trc         <int>        .D.V....... color transfer characteristics to apply to EXR linear input (from 1 to 18) (default gamma)
+                    bt709           1            .D.V....... BT.709
+                    gamma           2            .D.V....... gamma
+                    gamma22         4            .D.V....... BT.470 M
+                    gamma28         5            .D.V....... BT.470 BG
+                    smpte170m       6            .D.V....... SMPTE 170 M
+                    smpte240m       7            .D.V....... SMPTE 240 M
+                    linear          8            .D.V....... Linear
+                    log             9            .D.V....... Log
+                    log_sqrt        10           .D.V....... Log square root
+                    iec61966_2_4    11           .D.V....... IEC 61966-2-4
+                    bt1361          12           .D.V....... BT.1361
+                    iec61966_2_1    13           .D.V....... IEC 61966-2-1
+                    bt2020_10bit    14           .D.V....... BT.2020 - 10 bit
+                    bt2020_12bit    15           .D.V....... BT.2020 - 12 bit
+                    smpte2084       16           .D.V....... SMPTE ST 2084
+                    smpte428_1      17           .D.V....... SMPTE ST 428-1
+            */
         }
         _ => { }
+    }
+
+    if !pixel_format.is_empty() {
+        use std::str::FromStr;
+        match Pixel::from_str(&pixel_format.to_ascii_lowercase()) {
+            Ok(px) => { proc.video.encoder_pixel_format = Some(px); },
+            Err(e) => { ::log::debug!("Unknown requested pixel format: {}, {:?}", pixel_format, e); }
+        }
     }
 
     //proc.video.codec_options.set("preset", "medium");
@@ -181,7 +232,7 @@ pub fn render<T: PixelType, F>(stab: Arc<StabilizationManager<T>>, progress: F, 
     let mut process_frame = 0;
     proc.on_frame(move |mut timestamp_us, input_frame, output_frame, converter| {
         process_frame += 1;
-        log::debug!("process_frame: {}, timestamp_us: {}", process_frame, timestamp_us);
+        // log::debug!("process_frame: {}, timestamp_us: {}", process_frame, timestamp_us);
             
         if let Some(scale) = fps_scale {
             timestamp_us = (timestamp_us as f64 / scale).round() as i64;
@@ -190,7 +241,7 @@ pub fn render<T: PixelType, F>(stab: Arc<StabilizationManager<T>>, progress: F, 
         let output_frame = output_frame.unwrap();
 
         macro_rules! create_planes_proc {
-            ($planes:ident, $(($t:tt, $in_frame:expr, $out_frame:expr, $ind:expr, $yuvi:expr), )*) => {
+            ($planes:ident, $(($t:tt, $in_frame:expr, $out_frame:expr, $ind:expr, $yuvi:expr, $max_val:expr), )*) => {
                 $({
                     let in_size  = ($in_frame .plane_width($ind) as usize, $in_frame .plane_height($ind) as usize, $in_frame .stride($ind) as usize);
                     let out_size = ($out_frame.plane_width($ind) as usize, $out_frame.plane_height($ind) as usize, $out_frame.stride($ind) as usize);
@@ -198,10 +249,13 @@ pub fn render<T: PixelType, F>(stab: Arc<StabilizationManager<T>>, progress: F, 
                         let mut params = stab.params.write();
                         params.size        = (in_size.0,  in_size.1);
                         params.output_size = (out_size.0, out_size.1);
+                        params.video_size  = params.size;
+                        params.video_output_size = params.output_size;
                         params.background
                     };
                     let mut plane = Undistortion::<$t>::default();
-                    plane.init_size(<$t as PixelType>::from_rgb_color(bg, &$yuvi), (in_size.0, in_size.1), in_size.2, (out_size.0, out_size.1), out_size.2);
+                    plane.interpolation = Interpolation::Lanczos4;
+                    plane.init_size(<$t as PixelType>::from_rgb_color(bg, &$yuvi, $max_val), (in_size.0, in_size.1), in_size.2, (out_size.0, out_size.1), out_size.2);
                     plane.set_compute_params(ComputeParams::from_manager(&stab));
                     $planes.push(Box::new(move |timestamp_us: i64, in_frame_data: &mut Video, out_frame_data: &mut Video, plane_index: usize| {
                         let (w, h, s)    = ( in_frame_data.plane_width(plane_index) as usize,  in_frame_data.plane_height(plane_index) as usize,  in_frame_data.stride(plane_index) as usize);
@@ -220,45 +274,74 @@ pub fn render<T: PixelType, F>(stab: Arc<StabilizationManager<T>>, progress: F, 
             // https://gist.github.com/Jim-Bar/3cbba684a71d1a9d468a6711a6eddbeb
             match input_frame.format() {
                 Pixel::NV12 => {
-                    create_planes_proc!(planes, 
-                        (Luma8, input_frame, output_frame, 0, [0]),
-                        (UV8,   input_frame, output_frame, 1, [1,2]),
+                    create_planes_proc!(planes,
+                        (Luma8, input_frame, output_frame, 0, [0], 255.0),
+                        (UV8,   input_frame, output_frame, 1, [1,2], 255.0),
                     );
                 },
                 Pixel::NV21 => {
-                    create_planes_proc!(planes, 
-                        (Luma8, input_frame, output_frame, 0, [0]),
-                        (UV8,   input_frame, output_frame, 1, [2,1]),
+                    create_planes_proc!(planes,
+                        (Luma8, input_frame, output_frame, 0, [0], 255.0),
+                        (UV8,   input_frame, output_frame, 1, [2,1], 255.0),
                     );
                 },
                 Pixel::P010LE | Pixel::P016LE => {
-                    create_planes_proc!(planes, 
-                        (Luma16, input_frame, output_frame, 0, [0]),
-                        (UV16,   input_frame, output_frame, 1, [1,2]),
+                    let max_val = match input_frame.format() {
+                        Pixel::P010LE => 1023.0,
+                        _ => 65535.0
+                    };
+                    create_planes_proc!(planes,
+                        (Luma16, input_frame, output_frame, 0, [0], max_val),
+                        (UV16,   input_frame, output_frame, 1, [1,2], max_val),
                     );
                 },
                 Pixel::YUV420P | Pixel::YUVJ420P => {
-                    create_planes_proc!(planes, 
-                        (Luma8, input_frame, output_frame, 0, [0]),
-                        (Luma8, input_frame, output_frame, 1, [1]),
-                        (Luma8, input_frame, output_frame, 2, [2]),
+                    create_planes_proc!(planes,
+                        (Luma8, input_frame, output_frame, 0, [0], 255.0),
+                        (Luma8, input_frame, output_frame, 1, [1], 255.0),
+                        (Luma8, input_frame, output_frame, 2, [2], 255.0),
                     );
                 },
-                Pixel::YUV420P10LE | Pixel::YUV420P16LE => {
-                    create_planes_proc!(planes, 
-                        (Luma16, input_frame, output_frame, 0, [0]),
-                        (Luma16, input_frame, output_frame, 1, [1]),
-                        (Luma16, input_frame, output_frame, 2, [2]),
+                Pixel::YUV420P10LE | Pixel::YUV420P12LE | Pixel::YUV420P14LE | Pixel::YUV420P16LE |
+                Pixel::YUV422P10LE | Pixel::YUV422P12LE | Pixel::YUV422P14LE | Pixel::YUV422P16LE |
+                Pixel::YUV444P10LE | Pixel::YUV444P12LE | Pixel::YUV444P14LE | Pixel::YUV444P16LE => {
+                    let max_val = match input_frame.format() {
+                        Pixel::YUV420P10LE | Pixel::YUV422P10LE | Pixel::YUV444P10LE => 1023.0,
+                        Pixel::YUV420P12LE | Pixel::YUV422P12LE | Pixel::YUV444P12LE => 4095.0,
+                        Pixel::YUV420P14LE | Pixel::YUV422P14LE | Pixel::YUV444P14LE => 16383.0,
+                        _ => 65535.0
+                    };
+                    create_planes_proc!(planes,
+                        (Luma16, input_frame, output_frame, 0, [0], max_val),
+                        (Luma16, input_frame, output_frame, 1, [1], max_val),
+                        (Luma16, input_frame, output_frame, 2, [2], max_val),
                     );
                 },
+                Pixel::YUVA444P10LE | Pixel::YUVA444P12LE | Pixel::YUVA444P16LE => {
+                    let max_val = match input_frame.format() {
+                        Pixel::YUVA444P10LE => 1023.0,
+                        Pixel::YUVA444P12LE => 4095.0,
+                        _ => 65535.0
+                    };
+                    create_planes_proc!(planes,
+                        (Luma16, input_frame, output_frame, 0, [0], max_val),
+                        (Luma16, input_frame, output_frame, 1, [1], max_val),
+                        (Luma16, input_frame, output_frame, 2, [2], max_val),
+                        (Luma16, input_frame, output_frame, 3, [3], max_val),
+                    );
+                },
+                Pixel::RGB24    => { create_planes_proc!(planes, (RGB8,   input_frame, output_frame, 0, [], 255.0), ); },
+                Pixel::RGBA     => { create_planes_proc!(planes, (RGBA8,  input_frame, output_frame, 0, [], 255.0), ); },
+                Pixel::RGB48BE  => { create_planes_proc!(planes, (RGB16,  input_frame, output_frame, 0, [], 65535.0), ); },
+                Pixel::RGBA64BE => { create_planes_proc!(planes, (RGBA16, input_frame, output_frame, 0, [], 65535.0), ); },
                 format => { // All other convert to YUV444P16LE
                     ::log::info!("Unknown format {:?}, converting to YUV444P16LE", format);
                     // Go through 4:4:4 because of even plane dimensions
                     converter.convert_pixel_format(input_frame, output_frame, Pixel::YUV444P16LE, |converted_frame, converted_output| {
-                        create_planes_proc!(planes, 
-                            (Luma16, converted_frame, converted_output, 0, [0]), 
-                            (Luma16, converted_frame, converted_output, 1, [1]), 
-                            (Luma16, converted_frame, converted_output, 2, [2]), 
+                        create_planes_proc!(planes,
+                            (Luma16, converted_frame, converted_output, 0, [0], 65535.0),
+                            (Luma16, converted_frame, converted_output, 1, [1], 65535.0),
+                            (Luma16, converted_frame, converted_output, 2, [2], 65535.0),
                         );
                     })?;
                 }
@@ -276,7 +359,12 @@ pub fn render<T: PixelType, F>(stab: Arc<StabilizationManager<T>>, progress: F, 
         };
 
         match input_frame.format() {
-            Pixel::NV12 | Pixel::NV21 | Pixel::YUV420P | Pixel::YUVJ420P | Pixel::P010LE | Pixel::P016LE | Pixel::YUV420P10LE | Pixel::YUV420P16LE => {
+            Pixel::NV12 | Pixel::NV21 | Pixel::YUV420P | Pixel::YUVJ420P | Pixel::P010LE | Pixel::P016LE | 
+            Pixel::YUV420P10LE | Pixel::YUV420P12LE | Pixel::YUV420P14LE | Pixel::YUV420P16LE |
+            Pixel::YUV422P10LE | Pixel::YUV422P12LE | Pixel::YUV422P14LE | Pixel::YUV422P16LE |
+            Pixel::YUV444P10LE | Pixel::YUV444P12LE | Pixel::YUV444P14LE | Pixel::YUV444P16LE |
+            Pixel::YUVA444P10LE | Pixel::YUVA444P12LE | Pixel::YUVA444P16LE |
+            Pixel::RGB24 | Pixel::RGBA | Pixel::RGB48BE | Pixel::RGBA64BE => {
                 undistort_frame(input_frame, output_frame)
             },
             _ => {
@@ -333,6 +421,9 @@ unsafe extern "C" fn ffmpeg_log(avcl: *mut c_void, level: i32, fmt: *const c_cha
         *LAST_PREFIX.write() = prefix;
 
         if let Ok(mut line) = String::from_utf8(line) {
+            if line.contains("failed to decode picture") {
+                *GPU_DECODING.write() = false;
+            }
             match level {
                 ffi::AV_LOG_PANIC | ffi::AV_LOG_FATAL | ffi::AV_LOG_ERROR => {
                     line = format!("<font color=\"#d82626\">{}</font>", line);
@@ -353,47 +444,61 @@ pub fn clear_log() { FFMPEG_LOG.write().clear() }
 
 /*
 pub fn test() {
-    log::debug!("FfmpegProcessor::supported_gpu_backends: {:?}", FfmpegProcessor::supported_gpu_backends());
+    log::debug!("FfmpegProcessor::supported_gpu_backends: {:?}", ffmpeg_hw::supported_gpu_backends());
 
-    let mut stab = StabilizationManager::default();
+    let stab = StabilizationManager::<crate::core::undistortion::RGBA8>::default();
     let duration_ms = 15015.0;
     let frame_count = 900;
     let fps = 60000.0/1001.0;
     let video_size = (3840, 2160);
 
-    stab.init_from_video_data("E:/clips/GoPro/rs/C0752.MP4", duration_ms, fps, frame_count, video_size);
-    stab.gyro.set_offset(0, -26.0);
-    stab.gyro.integration_method = 1;
-    stab.gyro.integrate();
-    stab.load_lens_profile("E:/clips/GoPro/rs/Sony_A7s3_Tamron_28-200_4k60p.json");
-    stab.init_size(video_size.0, video_size.1);
-    stab.smoothing_id = 1;
-    stab.smoothing_algs[1].as_mut().set_parameter("time_constant", 0.4);
-    stab.frame_readout_time = 8.9;
-    stab.fov = 1.0;
-    stab.background = nalgebra::Vector4::new(0.0, 0.0, 0.0, 0.0);
+    let vid = "E:/clips/GoPro/h9-test3.mp4";
+
+    stab.init_from_video_data(vid, duration_ms, fps, frame_count, video_size).unwrap();
+    {
+        let mut gyro = stab.gyro.write();
+
+        //gyro.set_offset(0, -26.0);
+        gyro.integration_method = 1;
+        gyro.integrate();
+    }
+    stab.load_lens_profile("E:/clips/GoPro/GoPro_Hero_7_Black_4K_60_wide_16by9_1_120.json").unwrap();
+    stab.set_size(video_size.0, video_size.1);
+    //stab.set_smoo
+    //stab.smoothing_id = 1;
+    //stab.smoothing_algs[1].as_mut().set_parameter("time_constant", 0.4);
+    {
+        let mut params = stab.params.write();
+        params.frame_readout_time = 8.9;
+        params.fov = 1.0;
+        params.background = nalgebra::Vector4::new(0.0, 0.0, 0.0, 0.0);
+    }
     stab.recompute_blocking();
 
     render(
-        stab, 
-        move |params: (f64, usize, usize)| {
-            ::log::debug!("frame {}/{}", params.1, params.2);
-        }, 
-        "E:/clips/GoPro/rs/C0752.MP4".into(),
+        Arc::new(stab),
+        move |_params: (f64, usize, usize, bool)| {
+            // ::log::debug!("frame {}/{}", params.1, params.2);
+        },
+        vid.into(),
         "x265".into(),
-        "E:/clips/GoPro/rs/C0752-test.MP4".into(), 
+        "",
+        &format!("{}_stab.mp4", vid),
         0.0,
-        1.0,
+        0.1,
         video_size.0,
         video_size.1,
+        100.0,
         true, 
         true,
+        0,
+        "",
         Arc::new(AtomicBool::new(false))
-    );
+    ).unwrap();
 }
 // use opencv::core::{Mat, Size, CV_8UC1};
 // use std::os::raw::c_void;
-        
+
 pub fn test_decode() {
     let mut proc = FfmpegProcessor::from_file("E:/clips/GoPro/rs/C0752.MP4", true).unwrap();
 

@@ -65,6 +65,7 @@ pub struct Controller {
     get_smoothing_max_angles: qt_method!(fn(&self) -> QJsonArray),
     get_smoothing_status: qt_method!(fn(&self) -> QJsonArray),
     set_smoothing_param: qt_method!(fn(&self, name: QString, val: f64)),
+    set_horizon_lock: qt_method!(fn(&self, lock_percent: f64, roll: f64)),
     set_preview_resolution: qt_method!(fn(&mut self, target_height: i32, player: QJSValue)),
     set_background_color: qt_method!(fn(&self, color: QString, player: QJSValue)),
     set_integration_method: qt_method!(fn(&self, index: usize)),
@@ -118,7 +119,7 @@ pub struct Controller {
 
     chart_data_changed: qt_signal!(),
 
-    render: qt_method!(fn(&self, codec: String, codec_options: String, output_path: String, trim_start: f64, trim_end: f64, output_width: usize, output_height: usize, bitrate: f64, use_gpu: bool, audio: bool)),
+    render: qt_method!(fn(&self, codec: String, codec_options: String, output_path: String, trim_start: f64, trim_end: f64, output_width: usize, output_height: usize, bitrate: f64, use_gpu: bool, audio: bool, pixel_format: String)),
     render_progress: qt_signal!(progress: f64, current_frame: usize, total_frames: usize, finished: bool),
 
     cancel_current_operation: qt_method!(fn(&mut self)),
@@ -161,6 +162,7 @@ pub struct Controller {
 
     message: qt_signal!(text: QString, arg: QString, callback: QString),
     error: qt_signal!(text: QString, arg: QString, callback: QString),
+    convert_format: qt_signal!(format: QString, supported: QString),
 
     video_path: String,
 
@@ -228,6 +230,7 @@ impl Controller {
                     remove_keys.into_iter().for_each(|k| { gyro.offsets.remove(&k); });
                     gyro.set_offset(new_ts, x.1);
                 }
+                this.stabilizer.invalidate_zooming();
             }
             this.update_offset_model();
             this.request_recompute();
@@ -253,7 +256,7 @@ impl Controller {
                 set_offsets(offsets);
             });
 
-            let ranges = sync.get_ranges();
+            let mut ranges = sync.get_ranges();
 
             self.cancel_flag.store(false, SeqCst);
             let cancel_flag = self.cancel_flag.clone();
@@ -261,9 +264,20 @@ impl Controller {
             let video_path = self.video_path.clone();
             let (sw, sh) = (size.0 as u32, size.1 as u32);
             core::run_threaded(move || {
+                let mut fps_scale = None;
+                
                 match FfmpegProcessor::from_file(&video_path, *rendering::GPU_DECODING.read(), 0) {
                     Ok(mut proc) => {
-                        proc.on_frame(|timestamp_us, input_frame, _output_frame, converter| {
+                        if fps > 0.0 && proc.decoder_fps > 0.0 && (fps - proc.decoder_fps).abs() > 0.1 {
+                            ::log::debug!("Rescaling timestamp from {fps}fps to {}fps", proc.decoder_fps);
+                            let scale = proc.decoder_fps / fps;
+                            ranges.iter_mut().for_each(|(f, t)| { *f /= scale; *t /= scale; });
+                            fps_scale = Some(scale);
+                        }
+                        proc.on_frame(|mut timestamp_us, input_frame, _output_frame, converter| {
+                            if let Some(scale) = fps_scale {
+                                timestamp_us = (timestamp_us as f64 * scale).round() as i64;
+                            }
                             let frame = core::frame_at_timestamp(timestamp_us as f64 / 1000.0, fps);
       
                             assert!(_output_frame.is_none());
@@ -365,7 +379,9 @@ impl Controller {
                         if let Err(e) = stab.init_from_video_data(&s, duration_ms, fps, frame_count, video_size) {
                             err(("An error occured: %1".to_string(), e.to_string()));
                         } else {
-                            stab.set_output_size(video_size.0, video_size.1);
+                            if stab.set_output_size(video_size.0, video_size.1) {
+                                stab.recompute_undistortion();
+                            }
                         }
                     } else if let Err(e) = stab.load_gyro_data(&s) {
                         err(("An error occured: %1".to_string(), e.to_string()));
@@ -386,7 +402,7 @@ impl Controller {
                     let camera_id = stab.camera_id.read();
 
                     let id_str = camera_id.as_ref().map(|v| v.identifier.clone()).unwrap_or_default();
-                    if !id_str.is_empty() {
+                    if is_main_video && !id_str.is_empty() {
                         let db = stab.lens_profile_db.read();
                         if db.contains_id(&id_str) {
                             load_lens(id_str.clone());
@@ -432,7 +448,7 @@ impl Controller {
                 let new_h = (vid.videoHeight as f64 / (vid.videoWidth as f64 / new_w as f64)).floor() as u32;
                 ::log::info!("surface size: {}x{}", new_w, new_h);
 
-                self.stabilizer.pose_estimator.clear();
+                self.stabilizer.pose_estimator.rescale(new_w, new_h);
                 self.chart_data_changed();
 
                 vid.setSurfaceSize(new_w, new_h);
@@ -451,6 +467,8 @@ impl Controller {
         let stab = self.stabilizer.clone();
         core::run_threaded(move || {
             {
+                stab.invalidate_ongoing_computations();
+
                 let mut gyro = stab.gyro.write();
                 gyro.integration_method = index;
                 gyro.integrate();
@@ -547,6 +565,7 @@ impl Controller {
         self.chart_data_changed();
         self.request_recompute();
     }
+    wrap_simple_method!(set_horizon_lock, lock_percent: f64, roll: f64; recompute; chart_data_changed);
     pub fn get_smoothing_algs(&self) -> QVariantList {
         self.stabilizer.get_smoothing_algs().into_iter().map(QString::from).collect()
     }
@@ -572,7 +591,7 @@ impl Controller {
         self.compute_progress(id, 0.0);
     }
 
-    fn render(&self, codec: String, codec_options: String, output_path: String, trim_start: f64, trim_end: f64, output_width: usize, output_height: usize, bitrate: f64, use_gpu: bool, audio: bool) {
+    fn render(&self, codec: String, codec_options: String, output_path: String, trim_start: f64, trim_end: f64, output_width: usize, output_height: usize, bitrate: f64, use_gpu: bool, audio: bool, pixel_format: String) {
         rendering::clear_log();
 
         let rendered_frames = Arc::new(AtomicUsize::new(0));
@@ -589,6 +608,10 @@ impl Controller {
             this.render_progress(1.0, 0, 0, true);
         });
 
+        let convert_format = util::qt_queued_callback_mut(self, |this, (format, supported): (String, String)| {
+            this.convert_format(QString::from(format), QString::from(supported));
+            this.render_progress(1.0, 0, 0, true);
+        });
         let trim_ratio = trim_end - trim_start;
         let total_frame_count = self.stabilizer.params.read().frame_count;
         let video_path = self.video_path.clone();
@@ -605,8 +628,12 @@ impl Controller {
 
             let mut i = 0;
             loop {
-                let result = rendering::render(stab.clone(), progress.clone(), &video_path, &codec, &codec_options, &output_path, trim_start, trim_end, output_width, output_height, bitrate, use_gpu, audio, i, cancel_flag.clone());
+                let result = rendering::render(stab.clone(), progress.clone(), &video_path, &codec, &codec_options, &output_path, trim_start, trim_end, output_width, output_height, bitrate, use_gpu, audio, i, &pixel_format, cancel_flag.clone());
                 if let Err(e) = result {
+                    if let rendering::FFmpegError::PixelFormatNotSupported((fmt, supported)) = e {
+                        convert_format((format!("{:?}", fmt), supported.into_iter().map(|v| format!("{:?}", v)).collect::<Vec<String>>().join(",")));
+                        break;
+                    }
                     if rendered_frames2.load(SeqCst) == 0 {
                         if i >= 0 && i < 4 {
                             // Try 4 times with different GPU decoders
@@ -667,9 +694,11 @@ impl Controller {
     }
 
     fn set_output_size(&self, w: usize, h: usize) {
-        self.stabilizer.set_output_size(w, h);
-        self.request_recompute();
-        qrhi_undistort::resize_player(self.stabilizer.clone());
+        if self.stabilizer.set_output_size(w, h) {
+            self.stabilizer.recompute_undistortion();
+            self.request_recompute();
+            qrhi_undistort::resize_player(self.stabilizer.clone());
+        }
     }
 
     wrap_simple_method!(override_video_fps,         v: f64; recompute; update_offset_model);
@@ -739,7 +768,7 @@ impl Controller {
         {
             self.stabilizer.params.write().is_calibrator = true;
             *self.stabilizer.lens_calibrator.write() = Some(LensCalibrator::new());
-            self.stabilizer.set_smoothing_method(1); // Plain 3D
+            self.stabilizer.set_smoothing_method(2); // Plain 3D
             self.stabilizer.set_smoothing_param("time_constant", 2.0);
         }
     }
@@ -818,7 +847,15 @@ impl Controller {
                             }
 
                             if (frame % every_nth_frame as i32) == 0 {
-                                match converter.scale(input_frame, ffmpeg_next::format::Pixel::GRAY8, input_frame.width(), input_frame.height()) {
+                                let mut width = input_frame.width();
+                                let mut height = input_frame.height();
+                                let mut pt_scale = 1.0;
+                                if height > 2160 {
+                                    pt_scale = height as f32 / 2160.0;
+                                    width = (width as f32 / pt_scale).round() as u32;
+                                    height = (height as f32 / pt_scale).round() as u32;
+                                }
+                                match converter.scale(input_frame, ffmpeg_next::format::Pixel::GRAY8, width, height) {
                                     Ok(mut small_frame) => {
                                         let (width, height, stride, pixels) = (small_frame.plane_width(0), small_frame.plane_height(0), small_frame.stride(0), small_frame.data_mut(0));
 
@@ -828,7 +865,7 @@ impl Controller {
                                         if is_forced {
                                             cal.forced_frames.insert(frame);
                                         }
-                                        cal.feed_frame(timestamp_us, frame, width, height, stride, pixels, cancel_flag.clone(), total, processed.clone(), progress.clone());
+                                        cal.feed_frame(timestamp_us, frame, width, height, stride, pt_scale, pixels, cancel_flag.clone(), total, processed.clone(), progress.clone());
                                     },
                                     Err(e) => {
                                         err(("An error occured: %1".to_string(), e.to_string()))
@@ -845,11 +882,12 @@ impl Controller {
                         err(("An error occured: %1".to_string(), error.to_string()));
                     }
                 }
-                while processed.load(SeqCst) < total_read.load(SeqCst) {
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
                 // Don't lock the UI trying to draw chessboards while we calibrate
                 stab.params.write().is_calibrator = false;
+
+                while processed.load(SeqCst) < total_read.load(SeqCst) {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
                 
                 let mut lock = cal.write();
                 let cal = lock.as_mut().unwrap();

@@ -73,6 +73,20 @@ Item {
             }
             return;
         }
+        let newUrl;
+        if (newUrl = detectImageSequence(url)) {
+            const dlg = messageBox(Modal.Info, qsTr("Image sequence has been detected.\nPlease provide frame rate: "), [
+                { text: qsTr("Ok"), accent: true, clicked: function() {
+                    const fps = dlg.mainColumn.children[1].value;
+                    loadFile(newUrl);
+                    vid.setFrameRate(fps);
+                } },
+                { text: qsTr("Cancel") },
+            ]);
+            const nf = Qt.createComponent("components/NumberField.qml").createObject(dlg.mainColumn, { precision: 3, unit: "fps", value: 30.0 });
+            nf.anchors.horizontalCenter = dlg.mainColumn.horizontalCenter;
+            return;
+        }
         window.stab.fovSlider.value = 1.0;
         vid.loaded = false;
         videoLoader.active = true;
@@ -83,7 +97,7 @@ Item {
         const pathParts = url.toString().split(".");
         pathParts.pop();
         if (!isCalibrator) {
-            window.outputFile = controller.url_to_path(pathParts.join(".") + "_stabilized.mp4");
+            window.outputFile = controller.url_to_path(pathParts.join(".") + "_stabilized.mp4").replace(/%0[0-9]+d/, "");
             window.exportSettings.updateCodecParams();
         }
         if (!isGyroflow && !root.pendingGyroflow.toString()) {
@@ -100,7 +114,7 @@ Item {
             }
         }
 
-        const filename = url.toString().split("/").pop();
+        const filename = controller.url_to_path(url).split("/").pop();
         dropText.loadingFile = filename;
         if (!isGyroflow) {
             vidInfo.updateEntry("File name", filename);
@@ -109,6 +123,26 @@ Item {
         vidInfo.updateEntry("Contains gyro", "---");
         timeline.editingSyncPoint = false;
     }
+    function detectImageSequence(url) {
+        const urlStr = controller.url_to_path(url);
+        if (/\d+\.(png|exr)$/i.test(urlStr)) {
+            let firstNum = urlStr.match(/(\d+)\.(png|exr)$/i);
+            if (firstNum[1]) {
+                let ext = firstNum[2];
+                firstNum = firstNum[1];
+                for (let i = +firstNum + 1; i < +firstNum + 5; ++i) { // At least 5 frames
+                    const newNum = i.toString().padStart(firstNum.length, '0');
+                    let newPath = urlStr.replace(firstNum + "." + ext, newNum + "." + ext);
+                    if (!controller.file_exists(newPath)) {
+                        return false;
+                    }
+                }
+                return controller.path_to_url(urlStr.replace(`${firstNum}.${ext}`, `%0${firstNum.length}d.${ext}`));
+            }
+        }
+        return false;
+    }
+
     Connections {
         target: controller;
         function onTelemetry_loaded(is_main_video, filename, camera, imu_orientation, contains_gyro, contains_quats, frame_readout_time, camera_id_json) {
@@ -179,14 +213,21 @@ Item {
                 onMetadataChanged: {
                     if (vid.frameCount > 0) {
                         // Trigger seek to buffer the video frames
-                        Qt.callLater(() => {
-                            vid.currentFrame++;
-                            Qt.callLater(() => vid.currentFrame--);
-                        })
+                        bufferTrigger.start();
                     } else if (!errorShown) {
                         messageBox(Modal.Error, qsTr("Failed to load the selected file, it may be unsupported or invalid."), [ { "text": qsTr("Ok") } ]);
                         errorShown = true;
                         dropText.loadingFile = "";
+                    }
+                }
+                Timer {
+                    id: bufferTrigger;
+                    interval: 500;
+                    onTriggered: {
+                        Qt.callLater(() => {
+                            vid.currentFrame++;
+                            Qt.callLater(() => vid.currentFrame--);
+                        })
                     }
                 }
 
@@ -293,6 +334,7 @@ Item {
         }
         LoaderOverlay {
             id: videoLoader;
+            onActiveChanged: vid.forceRedraw();
             onCancel: controller.cancel_current_operation();
         }
 
@@ -386,7 +428,7 @@ Item {
                 SmallLinkButton {
                     id: stabEnabledBtn;
                     icon.name: "gyroflow";
-                    onCheckedChanged: controller.stab_enabled = checked;
+                    onCheckedChanged: { controller.stab_enabled = checked; vid.forceRedraw(); }
                     tooltip: qsTr("Toggle stabilization");
                 }
 
@@ -398,7 +440,7 @@ Item {
                 }
 
                 ComboBox {
-                    model: ["0.13x", "0.25x", "0.5x", "1x", "2x", "4x", "8x", "10x", "20x"];
+                    model: ["0.13x", "0.25x", "0.5x", "1x", "2x", "4x", "5x", "8x", "10x", "20x"];
                     width: 60 * dpiScale;
                     currentIndex: 3;
                     height: 25 * dpiScale;

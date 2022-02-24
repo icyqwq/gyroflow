@@ -1,10 +1,10 @@
 #!/bin/bash
 
-: "${PROJECT_DIR:=/Users/admin/gyroflow}"
+: "${PROJECT_DIR:=$(cd "$(dirname "$0")"; cd .. ; pwd -P)}"
 : "${CARGO_TARGET:=$PROJECT_DIR/target/release}"
 : "${QT_DIR:=$PROJECT_DIR/ext/6.2.3/macos}"
 : "${OPENCV_DIR:=$PROJECT_DIR/ext/vcpkg/installed}"
-: "${FFMPEG_DIR:=$PROJECT_DIR/ext/ffmpeg-4.4-macOS-gpl-lite}"
+: "${FFMPEG_DIR:=$PROJECT_DIR/ext/ffmpeg-5.0-macOS-gpl-lite}"
 
 rm -rf "$PROJECT_DIR/_deployment/_binaries/mac"
 
@@ -141,5 +141,5 @@ cp -f $QT_DIR/plugins/platforms/libqcocoa.dylib                                 
 
 if [ "$1" == "deploy" ] || [ "$1" == "deploy-universal" ]; then
     ln -sf /Applications "$PROJECT_DIR/_deployment/_binaries/mac/Applications"
-    hdiutil create "$PROJECT_DIR/_deployment/_binaries/Gyroflow-mac-universal.dmg" -volname "Gyroflow v1.0.0 RC0" -fs HFS+ -srcfolder "$PROJECT_DIR/_deployment/_binaries/mac/" -ov -format UDZO -imagekey zlib-level=9
+    hdiutil create "$PROJECT_DIR/_deployment/_binaries/Gyroflow-mac-universal.dmg" -volname "Gyroflow v1.0.0-rc4" -fs HFS+ -srcfolder "$PROJECT_DIR/_deployment/_binaries/mac/" -ov -format UDZO -imagekey zlib-level=9
 fi

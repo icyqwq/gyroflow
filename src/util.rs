@@ -130,6 +130,124 @@ pub fn open_file_externally(path: QString) {
     cpp!(unsafe [path as "QString"] { QDesktopServices::openUrl(QUrl::fromLocalFile(path)); });
 }
 
+pub fn init_logging() {
+    use simplelog::*;
+    use std::path::*;
+    let log_config = ConfigBuilder::new()
+        .add_filter_ignore_str("mp4parse")
+        .add_filter_ignore_str("wgpu")
+        .add_filter_ignore_str("naga")
+        .add_filter_ignore_str("akaze")
+        .add_filter_ignore_str("ureq")
+        .add_filter_ignore_str("rustls")
+        .add_filter_ignore_str("mdk")
+        .build();
+
+    let file_log_config = ConfigBuilder::new()
+        .add_filter_ignore_str("mp4parse")
+        .add_filter_ignore_str("wgpu")
+        .add_filter_ignore_str("naga")
+        .add_filter_ignore_str("akaze")
+        .add_filter_ignore_str("ureq")
+        .add_filter_ignore_str("rustls")
+        .build();
+
+    #[cfg(target_os = "android")]
+    WriteLogger::init(LevelFilter::Debug, log_config, util::AndroidLog::default()).unwrap();
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let exe_loc = std::env::current_exe().map(|x| x.with_file_name("gyroflow.log")).unwrap_or(PathBuf::from("./gyroflow.log"));
+        if let Ok(file_log) = std::fs::File::create(exe_loc) {
+            let _ = CombinedLogger::init(vec![
+                TermLogger::new(LevelFilter::Debug, log_config, TerminalMode::Mixed, ColorChoice::Auto),
+                WriteLogger::new(LevelFilter::Debug, file_log_config, file_log)
+            ]);
+        } else {
+            let _ = TermLogger::init(LevelFilter::Debug, log_config, TerminalMode::Mixed, ColorChoice::Auto);
+        }
+    }
+
+    qmetaobject::log::init_qt_to_rust();
+
+    qml_video_rs::video_item::MDKVideoItem::setLogHandler(|level: i32, text: String| {
+        match level {
+            1 => { ::log::error!(target: "mdk", "[MDK] {}", text.trim()); },
+            2 => { ::log::warn!(target: "mdk", "[MDK] {}", text.trim()); },
+            3 => { ::log::info!(target: "mdk", "[MDK] {}", text.trim()); },
+            4 => { ::log::debug!(target: "mdk", "[MDK] {}", text.trim()); },
+            _ => { }
+        }
+    });
+}
+
+pub fn install_crash_handler() -> std::io::Result<()> {
+    let cur_dir = std::env::current_dir()?;
+    let os_str = cur_dir.as_os_str();
+
+    let path: Vec<breakpad_sys::PathChar> = {
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            os_str.encode_wide().collect()
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            Vec::from(os_str.as_bytes())
+        }
+    };
+
+    unsafe {
+        extern "C" fn callback(path: *const breakpad_sys::PathChar, path_len: usize, _ctx: *mut std::ffi::c_void) {
+            let path_slice = unsafe { std::slice::from_raw_parts(path, path_len) };
+
+            let path = {
+                #[cfg(windows)]
+                {
+                    use std::os::windows::ffi::OsStringExt;
+                    std::path::PathBuf::from(std::ffi::OsString::from_wide(path_slice))
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::ffi::OsStrExt;
+                    std::path::PathBuf::from(std::ffi::OsStr::from_bytes(path_slice).to_owned())
+                }
+            };
+
+            println!("Crashdump written to {}", path.display());
+        }
+
+        breakpad_sys::attach_exception_handler(
+            path.as_ptr(),
+            path.len(),
+            callback,
+            std::ptr::null_mut(),
+            breakpad_sys::INSTALL_BOTH_HANDLERS,
+        );
+    }
+
+    // Upload crash dumps
+    crate::core::run_threaded(move || {
+        if let Ok(files) = std::fs::read_dir(cur_dir) {
+            for path in files {
+                if let Ok(path) = path {
+                    let path = path.path();
+                    if path.to_string_lossy().ends_with(".dmp") {
+                        if let Ok(content) = std::fs::read(&path) {
+                            if let Ok(Ok(body)) = ureq::post("https://api.gyroflow.xyz/upload_dump").set("Content-Type", "application/octet-stream").send_bytes(&content).map(|x| x.into_string()) {
+                                ::log::debug!("Minidump uploaded: {}", body.as_str());
+                                let _ = std::fs::remove_file(path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+    Ok(())
+}
+
 #[cfg(target_os = "android")]
 pub fn android_log(v: String) {
     use std::ffi::{CStr, CString};

@@ -10,130 +10,39 @@ pub mod lens_profile_database;
 pub mod calibration;
 pub mod synchronization;
 pub mod undistortion;
-pub mod adaptive_zoom;
 pub mod camera_identifier;
 
+pub mod zooming;
 pub mod smoothing;
 pub mod filtering;
 
 pub mod gpu;
 
 pub mod util;
+pub mod stabilization_params;
 
 use std::{sync::Arc, collections::BTreeMap};
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::SeqCst;
 use camera_identifier::CameraIdentifier;
-use parking_lot::RwLock;
+use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 pub use undistortion::PixelType;
 
 use crate::lens_profile_database::LensProfileDatabase;
 
-use self::{ lens_profile::LensProfile, smoothing::Smoothing, undistortion::Undistortion, adaptive_zoom::AdaptiveZoom };
+use self::{ lens_profile::LensProfile, smoothing::Smoothing, undistortion::Undistortion, zooming::ZoomingAlgorithm };
 #[cfg(feature = "opencv")]
 use self::calibration::LensCalibrator;
 
 use nalgebra::Vector4;
 use gyro_source::{ GyroSource, Quat64 };
+use stabilization_params::StabilizationParams;
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 lazy_static::lazy_static! {
     static ref THREAD_POOL: rayon::ThreadPool = rayon::ThreadPoolBuilder::new().build().unwrap();
-}
-
-#[derive(Clone)]
-pub struct BasicParams {
-    pub size: (usize, usize), // Processing input size
-    pub output_size: (usize, usize), // Processing output size
-    pub video_size: (usize, usize), // Full resolution input size
-    pub video_output_size: (usize, usize), // Full resoution output size
-
-    pub background: Vector4<f32>,
-
-    pub frame_readout_time: f64,
-    pub adaptive_zoom_window: f64,
-    pub fov: f64,
-    pub fovs: Vec<f64>,
-    pub min_fov: f64,
-    pub fps: f64,
-    pub fps_scale: Option<f64>,
-    pub frame_count: usize,
-    pub duration_ms: f64,
-
-    pub trim_start: f64,
-    pub trim_end: f64,
-
-    pub video_rotation: f64,
-
-    pub framebuffer_inverted: bool,
-    pub is_calibrator: bool,
-    
-    pub stab_enabled: bool,
-    pub show_detected_features: bool,
-    pub show_optical_flow: bool,
-}
-impl Default for BasicParams {
-    fn default() -> Self {
-        Self {
-            fov: 1.0,
-            min_fov: 1.0,
-            fovs: vec![],
-            stab_enabled: true,
-            show_detected_features: true,
-            show_optical_flow: true,
-            frame_readout_time: 0.0, 
-            adaptive_zoom_window: 0.0, 
-
-            size: (0, 0),
-            output_size: (0, 0),
-            video_size: (0, 0),
-            video_output_size: (0, 0),
-
-            video_rotation: 0.0,
-            
-            framebuffer_inverted: false,
-            is_calibrator: false,
-
-            trim_start: 0.0,
-            trim_end: 1.0,
-        
-            background: Vector4::new(0.0, 0.0, 0.0, 0.0),
-    
-            fps: 0.0,
-            fps_scale: None,
-            frame_count: 0,
-            duration_ms: 0.0,
-        }
-    }
-}
-
-impl BasicParams {
-    pub fn get_scaled_duration_ms(&self) -> f64 {
-        match self.fps_scale {
-            Some(scale) => self.duration_ms / scale,
-            None            => self.duration_ms
-        }
-    }
-    pub fn get_scaled_fps(&self) -> f64 {
-        match self.fps_scale {
-            Some(scale) => self.fps * scale,
-            None            => self.fps
-        }
-    }
-
-    pub fn set_fovs(&mut self, fovs: Vec<f64>, mut lens_fov_adjustment: f64) {
-        if let Some(mut min_fov) = fovs.iter().copied().reduce(f64::min) {
-            min_fov *= self.video_size.0 as f64 / self.video_output_size.0.max(1) as f64;
-            if lens_fov_adjustment <= 0.0001 { lens_fov_adjustment = 1.0 };
-            self.min_fov = min_fov / lens_fov_adjustment;
-        }
-        if fovs.is_empty() {
-            self.min_fov = 1.0;
-        }
-        self.fovs = fovs;
-    }
 }
 
 pub struct StabilizationManager<T: PixelType> {
@@ -148,14 +57,14 @@ pub struct StabilizationManager<T: PixelType> {
     pub lens_calibrator: Arc<RwLock<Option<LensCalibrator>>>,
 
     pub current_compute_id: Arc<AtomicU64>,
-    pub smoothness_checksum: Arc<AtomicU64>,
-    pub adaptive_zoom_checksum: Arc<AtomicU64>,
+    pub smoothing_checksum: Arc<AtomicU64>,
+    pub zooming_checksum: Arc<AtomicU64>,
     pub current_fov_10000: Arc<AtomicU64>,
 
     pub camera_id: Arc<RwLock<Option<CameraIdentifier>>>,
     pub lens_profile_db: Arc<RwLock<LensProfileDatabase>>,
 
-    pub params: Arc<RwLock<BasicParams>>
+    pub params: Arc<RwLock<StabilizationParams>>
 }
 
 impl<T: PixelType> Default for StabilizationManager<T> {
@@ -163,15 +72,15 @@ impl<T: PixelType> Default for StabilizationManager<T> {
         Self {
             smoothing: Arc::new(RwLock::new(Smoothing::default())),
 
-            params: Arc::new(RwLock::new(BasicParams::default())),
+            params: Arc::new(RwLock::new(StabilizationParams::default())),
             
             undistortion: Arc::new(RwLock::new(Undistortion::<T>::default())),
             gyro: Arc::new(RwLock::new(GyroSource::new())),
             lens: Arc::new(RwLock::new(LensProfile::default())),
             
             current_compute_id: Arc::new(AtomicU64::new(0)),
-            smoothness_checksum: Arc::new(AtomicU64::new(0)),
-            adaptive_zoom_checksum: Arc::new(AtomicU64::new(0)),
+            smoothing_checksum: Arc::new(AtomicU64::new(0)),
+            zooming_checksum: Arc::new(AtomicU64::new(0)),
 
             current_fov_10000: Arc::new(AtomicU64::new(0)),
             
@@ -288,8 +197,7 @@ impl<T: PixelType> StabilizationManager<T> {
             self.undistortion.write().init_size(bg, (w, h), s, (ow, oh), os);
             self.lens.write().optimal_fov = None;
             
-            self.smoothness_checksum.store(0, SeqCst);
-            self.adaptive_zoom_checksum.store(0, SeqCst);
+            self.invalidate_smoothing();
         }
     }
 
@@ -303,20 +211,29 @@ impl<T: PixelType> StabilizationManager<T> {
         }
         self.init_size();
     }
-    pub fn set_output_size(&self, width: usize, height: usize) {
+    pub fn set_output_size(&self, width: usize, height: usize) -> bool {
         if width > 0 && height > 0 {
-            {
-                let mut params = self.params.write();
-                let ratio = params.size.0 as f64 / width as f64;
-                params.output_size = ((width as f64 * ratio) as usize, (height as f64 * ratio) as usize);
-                params.video_output_size = (width, height);
+            let params = self.params.upgradable_read();
+            
+            let ratio = params.size.0 as f64 / width as f64;
+            let output_size = ((width as f64 * ratio) as usize, (height as f64 * ratio) as usize);
+            let video_output_size = (width, height);
+
+            if params.output_size != output_size || params.video_output_size != video_output_size {
+                {
+                    let mut params = RwLockUpgradableReadGuard::upgrade(params);
+                    params.output_size = output_size;
+                    params.video_output_size = video_output_size;
+                }
+                self.init_size();
+
+                return true;
             }
-            self.init_size();
-            self.recompute_undistortion();
         }
+        false
     }
 
-    pub fn recompute_adaptive_zoom_static(zoom: &mut AdaptiveZoom, params: &RwLock<BasicParams>) -> Vec<f64> {
+    pub fn recompute_adaptive_zoom_static(zoom: &Box<dyn ZoomingAlgorithm>, params: &RwLock<StabilizationParams>) -> Vec<f64> {
         let (window, frames, fps) = {
             let params = params.read();
             (params.adaptive_zoom_window, params.frame_count, params.get_scaled_fps())
@@ -336,7 +253,7 @@ impl<T: PixelType> StabilizationManager<T> {
     pub fn recompute_adaptive_zoom(&self) {
         let params = undistortion::ComputeParams::from_manager(self);
         let lens_fov_adjustment = params.lens_fov_adjustment;
-        let mut zoom = AdaptiveZoom::from_compute_params(params);
+        let mut zoom = zooming::from_compute_params(params);
         let fovs = Self::recompute_adaptive_zoom_static(&mut zoom, &self.params);
         self.params.write().set_fovs(fovs, lens_fov_adjustment);
     }
@@ -359,6 +276,10 @@ impl<T: PixelType> StabilizationManager<T> {
         self.recompute_adaptive_zoom();
         self.recompute_undistortion();
     }
+
+    pub fn invalidate_ongoing_computations(&self) {
+        self.current_compute_id.store(fastrand::u64(..), SeqCst);
+    }
     
     pub fn recompute_threaded<F: Fn(u64) + Send + Sync + Clone + 'static>(&self, cb: F) -> u64 {
         //self.recompute_smoothness();
@@ -366,15 +287,15 @@ impl<T: PixelType> StabilizationManager<T> {
         let mut params = undistortion::ComputeParams::from_manager(self);
 
         let smoothing = self.smoothing.clone();
-        let basic_params = self.params.clone();
+        let stabilization_params = self.params.clone();
         let gyro = self.gyro.clone();
 
         let compute_id = fastrand::u64(..);
         self.current_compute_id.store(compute_id, SeqCst);
 
         let current_compute_id = self.current_compute_id.clone();
-        let smoothness_checksum = self.smoothness_checksum.clone();
-        let adaptive_zoom_checksum = self.adaptive_zoom_checksum.clone();
+        let smoothing_checksum = self.smoothing_checksum.clone();
+        let zooming_checksum = self.zooming_checksum.clone();
 
         let undistortion = self.undistortion.clone();
         THREAD_POOL.spawn(move || {
@@ -382,9 +303,11 @@ impl<T: PixelType> StabilizationManager<T> {
             if current_compute_id.load(SeqCst) != compute_id { return; }
 
             let mut smoothing_changed = false;
-            if smoothing.read().get_state_checksum() != smoothness_checksum.load(SeqCst) {
+            if smoothing.read().get_state_checksum() != smoothing_checksum.load(SeqCst) {
                 let mut smoothing = smoothing.write().current().clone();
-                params.gyro.recompute_smoothness(smoothing.as_mut(), &basic_params.read());
+                params.gyro.recompute_smoothness(smoothing.as_mut(), &stabilization_params.read());
+
+                if current_compute_id.load(SeqCst) != compute_id { return; }
 
                 let mut lib_gyro = gyro.write();
                 lib_gyro.quaternions = params.gyro.quaternions.clone();
@@ -397,18 +320,21 @@ impl<T: PixelType> StabilizationManager<T> {
             
             if current_compute_id.load(SeqCst) != compute_id { return; }
 
-            let mut zoom = AdaptiveZoom::from_compute_params(params.clone());
-            if smoothing_changed || zoom.get_state_checksum() != adaptive_zoom_checksum.load(SeqCst) {
-                params.fovs = Self::recompute_adaptive_zoom_static(&mut zoom, &basic_params);
-                basic_params.write().set_fovs(params.fovs.clone(), params.lens_fov_adjustment);
+            let mut zoom = zooming::from_compute_params(params.clone());
+            if smoothing_changed || zooming::get_checksum(&zoom) != zooming_checksum.load(SeqCst) {
+                params.fovs = Self::recompute_adaptive_zoom_static(&mut zoom, &stabilization_params);
+
+                if current_compute_id.load(SeqCst) != compute_id { return; }
+
+                stabilization_params.write().set_fovs(params.fovs.clone(), params.lens_fov_adjustment);
             }
             
             if current_compute_id.load(SeqCst) != compute_id { return; }
 
             undistortion.write().set_compute_params(params);
 
-            smoothness_checksum.store(smoothing.read().get_state_checksum(), SeqCst);
-            adaptive_zoom_checksum.store(zoom.get_state_checksum(), SeqCst);
+            smoothing_checksum.store(smoothing.read().get_state_checksum(), SeqCst);
+            zooming_checksum.store(zooming::get_checksum(&zoom), SeqCst);
             cb(compute_id);
         });
         compute_id
@@ -533,8 +459,8 @@ impl<T: PixelType> StabilizationManager<T> {
 
     pub fn set_video_rotation(&self, v: f64) { self.params.write().video_rotation = v; }
 
-    pub fn set_trim_start(&self, v: f64) { self.params.write().trim_start = v; self.smoothness_checksum.store(0, SeqCst); }
-    pub fn set_trim_end  (&self, v: f64) { self.params.write().trim_end   = v; self.smoothness_checksum.store(0, SeqCst); }
+    pub fn set_trim_start(&self, v: f64) { self.params.write().trim_start = v; self.invalidate_smoothing(); }
+    pub fn set_trim_end  (&self, v: f64) { self.params.write().trim_end   = v; self.invalidate_smoothing(); }
 
     pub fn set_show_detected_features(&self, v: bool) { self.params.write().show_detected_features = v; }
     pub fn set_show_optical_flow     (&self, v: bool) { self.params.write().show_optical_flow      = v; }
@@ -547,10 +473,24 @@ impl<T: PixelType> StabilizationManager<T> {
     pub fn get_current_fov           (&self) -> f64 { self.current_fov_10000.load(SeqCst) as f64 / 10000.0 }
     pub fn get_min_fov               (&self) -> f64 { self.params.read().min_fov }
 
-    pub fn remove_offset      (&self, timestamp_us: i64)                 { self.gyro.write().remove_offset(timestamp_us); }
-    pub fn set_offset         (&self, timestamp_us: i64, offset_ms: f64) { self.gyro.write().set_offset(timestamp_us, offset_ms); }
-    pub fn clear_offsets      (&self) { self.gyro.write().offsets.clear(); }
-    pub fn offset_at_timestamp(&self, timestamp_us: i64) -> f64          { self.gyro.read() .offset_at_timestamp(timestamp_us as f64 / 1000.0) }
+    pub fn invalidate_smoothing(&self) { self.smoothing_checksum.store(0, SeqCst); }
+    pub fn invalidate_zooming(&self) { self.zooming_checksum.store(0, SeqCst); }
+
+    pub fn remove_offset(&self, timestamp_us: i64) {
+        self.gyro.write().remove_offset(timestamp_us);
+        self.invalidate_zooming();
+    }
+    pub fn set_offset(&self, timestamp_us: i64, offset_ms: f64) {
+        self.gyro.write().set_offset(timestamp_us, offset_ms);
+        self.invalidate_zooming();
+    }
+    pub fn clear_offsets(&self) {
+        self.gyro.write().offsets.clear();
+        self.invalidate_zooming();
+    }
+    pub fn offset_at_timestamp(&self, timestamp_us: i64) -> f64 {
+        self.gyro.read().offset_at_timestamp(timestamp_us as f64 / 1000.0)
+    }
 
     pub fn set_imu_lpf(&self, lpf: f64) {
         self.gyro.write().set_lowpass_filter(lpf);
@@ -608,16 +548,17 @@ impl<T: PixelType> StabilizationManager<T> {
         let mut smooth = self.smoothing.write();
         smooth.set_current(index);
         
-        self.smoothness_checksum.store(0, SeqCst);
-        self.adaptive_zoom_checksum.store(0, SeqCst);
+        self.invalidate_smoothing();
 
         smooth.current().get_parameters_json()
     }
     pub fn set_smoothing_param(&self, name: &str, val: f64) {
-        self.smoothness_checksum.store(0, SeqCst);
-        self.adaptive_zoom_checksum.store(0, SeqCst);
-
         self.smoothing.write().current().as_mut().set_parameter(name, val);
+        self.invalidate_smoothing();
+    }
+    pub fn set_horizon_lock(&self, lock_percent: f64, roll: f64) {
+        self.smoothing.write().current().as_mut().set_horizon_lock(lock_percent, roll);
+        self.invalidate_smoothing();
     }
     pub fn get_smoothing_max_angles(&self) -> (f64, f64, f64) {
         self.gyro.read().max_angles
@@ -652,7 +593,7 @@ impl<T: PixelType> StabilizationManager<T> {
             (params.stab_enabled, params.show_detected_features, params.show_optical_flow, params.background, params.adaptive_zoom_window, params.framebuffer_inverted)
         };
 
-        *self.params.write() = BasicParams {
+        *self.params.write() = StabilizationParams {
             stab_enabled, show_detected_features, show_optical_flow, background, adaptive_zoom_window, framebuffer_inverted, ..Default::default()
         };
         if !self.gyro.read().prevent_next_load {
@@ -674,8 +615,7 @@ impl<T: PixelType> StabilizationManager<T> {
 
         self.undistortion.write().set_compute_params(undistortion::ComputeParams::from_manager(self));
 
-        self.smoothness_checksum.store(0, SeqCst);
-        self.adaptive_zoom_checksum.store(0, SeqCst);
+        self.invalidate_smoothing();
     }
 
     pub fn export_gyroflow(&self, video_path: &str, filepath: impl AsRef<std::path::Path>, thin: bool) -> std::io::Result<()> {
@@ -767,6 +707,7 @@ impl<T: PixelType> StabilizationManager<T> {
         if let serde_json::Value::Object(ref mut obj) = obj {
             let mut duration_ms = 0.0;
             let mut fps = 0.0;
+            let video_path = obj.get("videofile").map(|x| x.to_string()).unwrap_or_default();
             if let Some(vid_info) = obj.get("video_info") {
                 duration_ms = vid_info.get("vfr_duration_ms").and_then(|x| x.as_f64()).unwrap_or_default();
                 fps = vid_info.get("vfr_fps").and_then(|x| x.as_f64()).unwrap_or_default();
@@ -777,6 +718,7 @@ impl<T: PixelType> StabilizationManager<T> {
             obj.remove("frame_orientation");
             obj.remove("stab_transform");
             if let Some(serde_json::Value::Object(ref mut obj)) = obj.get_mut("gyro_source") {
+                let gyro_path = obj.get("filepath").map(|x| x.to_string()).unwrap_or_default();
                 use crate::gyro_source::TimeIMU;
                 /*let quaternions = obj.get("quaternions")
                     .and_then(|x| x.as_object())
@@ -798,24 +740,27 @@ impl<T: PixelType> StabilizationManager<T> {
                     });*/
             
                 if let Some(ri) = obj.get("raw_imu") {
-                    let raw_imu: Option<Vec<TimeIMU>> = serde_json::from_value(ri.clone()).ok();
-                    if let Some(raw_imu) = raw_imu {
-                        if raw_imu.len() > 0 {
-                            let mut gyro_mut = self.gyro.write();
-                            gyro_mut.prevent_next_load = true;
-                            gyro_mut.fps = fps;
-                            gyro_mut.duration_ms = duration_ms;
+                    // Load IMU data only if it's from another file
+                    if gyro_path != video_path {
+                        let raw_imu: Option<Vec<TimeIMU>> = serde_json::from_value(ri.clone()).ok();
+                        if let Some(raw_imu) = raw_imu {
+                            if raw_imu.len() > 0 {
+                                let mut gyro_mut = self.gyro.write();
+                                gyro_mut.prevent_next_load = true;
+                                gyro_mut.fps = fps;
+                                gyro_mut.duration_ms = duration_ms;
 
-                            let md = crate::gyro_source::FileMetadata {
-                                imu_orientation: obj.get("imu_orientation").and_then(|x| x.as_str().map(|x| x.to_string())),
-                                detected_source: Some("Gyroflow file".to_string()),
-                                quaternions: None,
-                                raw_imu: Some(raw_imu),
-                                frame_readout_time: None,
-                                camera_identifier: None,
-                            };
-                            gyro_mut.load_from_telemetry(&md);
-                            self.smoothing.write().update_quats_checksum(&gyro_mut.quaternions);
+                                let md = crate::gyro_source::FileMetadata {
+                                    imu_orientation: obj.get("imu_orientation").and_then(|x| x.as_str().map(|x| x.to_string())),
+                                    detected_source: Some("Gyroflow file".to_string()),
+                                    quaternions: None,
+                                    raw_imu: Some(raw_imu),
+                                    frame_readout_time: None,
+                                    camera_identifier: None,
+                                };
+                                gyro_mut.load_from_telemetry(&md);
+                                self.smoothing.write().update_quats_checksum(&gyro_mut.quaternions);
+                            }
                         }
                     }
                 }

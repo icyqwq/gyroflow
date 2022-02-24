@@ -5,16 +5,15 @@ use nalgebra::*;
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 use std::fs::File;
-use std::path::Path;
 use telemetry_parser::{Input, util};
 use telemetry_parser::tags_impl::{GetWithType, GroupId, TagId, TimeQuaternion};
 
-use crate::BasicParams;
 use crate::camera_identifier::CameraIdentifier;
 
 use super::integration::*;
 use super::smoothing::SmoothingAlgorithm;
 use std::io::Result;
+use crate::StabilizationParams;
 
 pub type Quat64 = UnitQuaternion<f64>;
 pub type TimeIMU = telemetry_parser::util::IMUData;
@@ -88,18 +87,16 @@ impl GyroSource {
             ..Default::default()
         }
     }
-    pub fn init_from_params(&mut self, params: &BasicParams) {
-        self.fps = params.get_scaled_fps();
-        self.duration_ms = params.get_scaled_duration_ms();
+    pub fn init_from_params(&mut self, stabilization_params: &StabilizationParams) {
+        self.fps = stabilization_params.get_scaled_fps();
+        self.duration_ms = stabilization_params.get_scaled_duration_ms();
         self.offsets.clear();
     }
     pub fn parse_telemetry_file(path: &str, size: (usize, usize), fps: f64) -> Result<FileMetadata> {
         let mut stream = File::open(path)?;
         let filesize = stream.metadata()?.len() as usize;
     
-        let filename = Path::new(&path).file_name().unwrap().to_str().unwrap();
-    
-        let input = Input::from_stream(&mut stream, filesize, filename)?;
+        let input = Input::from_stream(&mut stream, filesize, &path)?;
 
         let camera_identifier = CameraIdentifier::from_telemetry_parser(&input, size.0, size.1, fps).ok();
     
@@ -168,16 +165,18 @@ impl GyroSource {
         self.imu_orientation = telemetry.imu_orientation.clone();
         self.detected_source = telemetry.detected_source.clone();
 
-        if let Some(imu) = &telemetry.raw_imu {
-            self.org_raw_imu = imu.clone();
-            self.apply_transforms();
-        }
         if let Some(quats) = &telemetry.quaternions {
             self.quaternions = quats.clone();
             self.org_quaternions = self.quaternions.clone();
         }
-
-        if self.quaternions.is_empty() {
+        if !self.quaternions.is_empty() {
+            self.integration_method = 0;
+        }
+        
+        if let Some(imu) = &telemetry.raw_imu {
+            self.org_raw_imu = imu.clone();
+            self.apply_transforms();
+        } else if self.quaternions.is_empty() {
             self.integrate();
         }
     }
@@ -220,9 +219,9 @@ impl GyroSource {
         }
     }
 
-    pub fn recompute_smoothness(&mut self, alg: &mut dyn SmoothingAlgorithm, params: &BasicParams) {
-        self.smoothed_quaternions = alg.smooth(&self.quaternions, self.duration_ms, params);
-        self.max_angles = crate::Smoothing::get_max_angles(&self.quaternions, &self.smoothed_quaternions, params);
+    pub fn recompute_smoothness(&mut self, alg: &mut dyn SmoothingAlgorithm, stabilization_params: &StabilizationParams) {
+        self.smoothed_quaternions = alg.smooth(&self.quaternions, self.duration_ms, stabilization_params);
+        self.max_angles = crate::Smoothing::get_max_angles(&self.quaternions, &self.smoothed_quaternions, stabilization_params);
         self.org_smoothed_quaternions = self.smoothed_quaternions.clone();
 
         for (sq, q) in self.smoothed_quaternions.iter_mut().zip(self.quaternions.iter()) {
@@ -347,14 +346,15 @@ impl GyroSource {
             _ => {
                 if let Some(&first_ts) = self.offsets.keys().next() {
                     if let Some(&last_ts) = self.offsets.keys().next_back() {
-                        let lookup_ts = ((timestamp_ms * 1000.0) as i64).min(last_ts).max(first_ts);
+                        let timestamp_us = (timestamp_ms * 1000.0) as i64; 
+                        let lookup_ts = (timestamp_us).min(last_ts-1).max(first_ts+1);
                         if let Some(offs1) = self.offsets.range(..=lookup_ts).next_back() {
                             if *offs1.0 == lookup_ts {
                                 return *offs1.1;
                             }
                             if let Some(offs2) = self.offsets.range(lookup_ts..).next() {
                                 let time_delta = (offs2.0 - offs1.0) as f64;
-                                let fract = (lookup_ts - offs1.0) as f64 / time_delta;
+                                let fract = (timestamp_us - offs1.0) as f64 / time_delta;
                                 return offs1.1 + (offs2.1 - offs1.1) * fract;
                             }
                         }

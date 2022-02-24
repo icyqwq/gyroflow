@@ -51,7 +51,9 @@ Item {
                 time.elapsed = timeToStr(elapsedMs / 1000);
                 time.remaining = timeToStr(remainingMs / 1000);
             }
+            ui_tools.set_progress(progress);
         } else {
+            ui_tools.set_progress(-1.0);
             time.elapsed = "";
         }
     }
@@ -66,8 +68,8 @@ Item {
 
     anchors.fill: parent;
     QQC.ProgressBar { id: pb; anchors.centerIn: parent; value: parent.progress; visible: parent.progress != -1 && !root.canceled; }
-    QQC.BusyIndicator { id: bi; anchors.centerIn: parent; visible: parent.progress == -1 || root.canceled; }
-    
+    QQC.BusyIndicator { id: bi; anchors.centerIn: parent; visible: parent.active && (parent.progress == -1 || root.canceled); }
+
     Column {
         id: c;
         anchors.top: pb.visible? pb.bottom : bi.bottom;

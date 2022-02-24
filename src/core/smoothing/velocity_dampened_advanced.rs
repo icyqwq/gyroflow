@@ -17,8 +17,7 @@ pub struct VelocityDampenedAdvanced {
     pub time_constant: f64,
     pub time_constant2: f64,
     pub velocity_factor: f64,
-    pub horizonlockpercent: f64,
-    pub horizonroll: f64
+    pub horizonlock: horizon::HorizonLock
 }
 
 impl Default for VelocityDampenedAdvanced {
@@ -26,24 +25,26 @@ impl Default for VelocityDampenedAdvanced {
         time_constant: 0.6,
         time_constant2: 0.1,
         velocity_factor: 0.9,
-        horizonlockpercent: 0.0,
-        horizonroll: 0.0
+        horizonlock: Default::default()
     } }
 }
 
 impl SmoothingAlgorithm for VelocityDampenedAdvanced {
-    fn get_name(&self) -> String { "Velocity dampened (Advanced)".to_owned() }
+    fn get_name(&self) -> String { "Velocity dampened (advanced)".to_owned() }
 
     fn set_parameter(&mut self, name: &str, val: f64) {
         match name {
             "time_constant"   => self.time_constant   = val,
             "time_constant2"  => self.time_constant2  = val,
             "velocity_factor" => self.velocity_factor = val,
-            "horizonroll" => self.horizonroll = val,
-            "horizonlockpercent" => self.horizonlockpercent = val,
             _ => log::error!("Invalid parameter name: {}", name)
         }
     }
+
+    fn set_horizon_lock(&mut self, lock_percent: f64, roll: f64) {
+        self.horizonlock.set_horizon(lock_percent, roll);
+    }
+
     fn get_parameters_json(&self) -> serde_json::Value {
         serde_json::json!([
             {
@@ -51,7 +52,7 @@ impl SmoothingAlgorithm for VelocityDampenedAdvanced {
                 "description": "Smoothness",
                 "type": "SliderWithField",
                 "from": 0.01,
-                "to": 2.0,
+                "to": 3.0,
                 "value": self.time_constant,
                 "default": 1.0,
                 "unit": "s"
@@ -72,7 +73,7 @@ impl SmoothingAlgorithm for VelocityDampenedAdvanced {
                 "description": "Velocity factor",
                 "type": "SliderWithField",
                 "from": 0.001,
-                "to": 1.0,
+                "to": 5.0,
                 "value": self.velocity_factor,
                 "default": 0.5,
                 "unit": "",
@@ -89,12 +90,11 @@ impl SmoothingAlgorithm for VelocityDampenedAdvanced {
         hasher.write_u64(self.time_constant.to_bits());
         hasher.write_u64(self.time_constant2.to_bits());
         hasher.write_u64(self.velocity_factor.to_bits());
-        hasher.write_u64(self.horizonroll.to_bits());
-        hasher.write_u64(self.horizonlockpercent.to_bits());
+        hasher.write_u64(self.horizonlock.get_checksum());
         hasher.finish()
     }
 
-    fn smooth(&mut self, quats: &TimeQuat, duration: f64, _params: &crate::BasicParams) -> TimeQuat { // TODO Result<>?
+    fn smooth(&mut self, quats: &TimeQuat, duration: f64, _stabilization_params: &StabilizationParams) -> TimeQuat { // TODO Result<>?
         if quats.is_empty() || duration <= 0.0 { return quats.clone(); }
 
         const MAX_VELOCITY: f64 = 500.0;
@@ -157,15 +157,6 @@ impl SmoothingAlgorithm for VelocityDampenedAdvanced {
             (*ts, q)
         }).collect();
 
-        // level horizon
-        const DEG2RAD: f64 = std::f64::consts::PI / 180.0;
-
-        if self.horizonlockpercent == 0.0 {
-            smoothed2
-        } else {
-            smoothed2.iter().map(|x| {
-                (*x.0,  lock_horizon_angle(*x.1, self.horizonroll * DEG2RAD).slerp(x.1, 1.0-self.horizonlockpercent/100.0))
-            }).collect()
-        }
+        self.horizonlock.lock(&smoothed2)
     }
 }

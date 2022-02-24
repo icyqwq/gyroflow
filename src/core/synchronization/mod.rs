@@ -38,6 +38,7 @@ pub type GrayImage = image::GrayImage;
 pub struct FrameResult {
     item: EstimatorItem,
     pub timestamp_us: i64,
+    pub frame_size: (u32, u32),
     pub rotation: Option<Rotation3<f64>>,
     pub quat: Option<Quat64>,
     pub euler: Option<(f64, f64, f64)>
@@ -66,6 +67,18 @@ impl PoseEstimator {
         #[cfg(feature = "use-opencv")]
         let _ = opencv::init();
     }
+    pub fn rescale(&self, width: u32, height: u32) {
+        let mut results = self.sync_results.write();
+        for (_k, v) in results.iter_mut() {
+            let ratio = width as f32 / v.frame_size.0 as f32;
+            v.frame_size = (width, height);
+            match v.item {
+                #[cfg(feature = "use-opencv")]
+                EstimatorItem::OpenCV(ref mut x) => { x.rescale(ratio); },
+                EstimatorItem::Akaze (ref mut x)  => { x.rescale(ratio); }
+            };
+        }
+    }
 
     pub fn insert_empty_result(&self, frame: usize, timestamp_us: i64, method: u32) {
         let item = match method {
@@ -78,6 +91,7 @@ impl PoseEstimator {
             let mut l = self.sync_results.write();
             l.entry(frame).or_insert(FrameResult {
                 item,
+                frame_size: (0, 0),
                 timestamp_us,
                 rotation: None,
                 quat: None,
@@ -86,6 +100,7 @@ impl PoseEstimator {
         }
     }
     pub fn detect_features(&self, frame: usize, timestamp_us: i64, method: u32, img: image::GrayImage) {
+        let frame_size = (img.width(), img.height());
         let item = match method {
             0 => EstimatorItem::Akaze(ItemAkaze::detect_features(frame, img)),
             #[cfg(feature = "use-opencv")]
@@ -96,6 +111,7 @@ impl PoseEstimator {
             let mut l = self.sync_results.write();
             l.entry(frame).or_insert(FrameResult {
                 item,
+                frame_size,
                 timestamp_us,
                 rotation: None,
                 quat: None,
@@ -206,21 +222,37 @@ impl PoseEstimator {
         }).unzip())
     }
 
+    pub fn optical_flow(&self, num_frames: usize) {
+        let mut to_items= BTreeMap::<usize, EstimatorItem>::new();
+        if let Some(l) = self.sync_results.try_read() {
+            l.iter().for_each(|(&i, fr)| {to_items.insert(i, fr.item.clone());} );
+        }
+
+        if let Some(mut l) = self.sync_results.try_write() {
+            l.iter_mut().for_each(|(frame, from_fr)| {
+                for d in 1..=num_frames {
+                     if let Some(to_item) = to_items.get_mut(&(frame + d)) {
+                        match (&mut from_fr.item, to_item) {
+                            #[cfg(feature = "use-opencv")]
+                            (EstimatorItem::OpenCV(from), EstimatorItem::OpenCV(to)) => { from.optical_flow_to_frame(to, d, true); }
+                            (EstimatorItem::Akaze (from),  EstimatorItem::Akaze (to))  => { from.optical_flow_to_frame(to, d, true); }
+                            _ => ()
+                        };
+                     }
+                }
+            });
+        }
+    }
+
     pub fn get_of_lines_for_frame(&self, frame: &usize, scale: f64, num_frames: usize) -> Option<(Vec<(f64, f64)>, Vec<(f64, f64)>)> {
         if let Some(l) = self.sync_results.try_read() {
             if let Some(curr) = l.get(frame) {
-                if let Some(next) = l.get(&(frame + num_frames)) {
-                    let mut curr = curr.item.clone();
-                    let mut next = next.item.clone();
-                    drop(l);
-
-                    return match (&mut curr, &mut next) {
-                        #[cfg(feature = "use-opencv")]
-                        (EstimatorItem::OpenCV(curr), EstimatorItem::OpenCV(next)) => { Self::filter_of_lines(curr.get_matched_features_pair(next, scale)) }
-                        (EstimatorItem::Akaze (curr),  EstimatorItem::Akaze (next))  => { Self::filter_of_lines(curr.get_matched_features_pair(next, scale)) }
-                        _ => None
-                    };
-                }
+                return match &curr.item {
+                    #[cfg(feature = "use-opencv")]
+                    EstimatorItem::OpenCV(curr) => { Self::filter_of_lines(curr.get_optical_flow_lines(num_frames, scale)) }
+                    EstimatorItem::Akaze (curr)  => { Self::filter_of_lines(curr.get_optical_flow_lines(num_frames, scale)) }
+                    _ => None
+                };
             }
         }
         None

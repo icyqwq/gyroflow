@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright © 2021-2022 Adrian <adrian.eddy at gmail>
 
+pub mod horizon;
 pub mod none;
 pub mod plain;
-// pub mod horizon;
 pub mod fixed;
-// pub mod velocity_dampened_v1;
-pub mod velocity_dampened;
-pub mod velocity_dampened_axis;
+pub mod default_algo;
+pub mod default_algo_2;
 pub mod velocity_dampened_advanced;
 
 pub use nalgebra::*;
@@ -17,40 +16,7 @@ use dyn_clone::{ clone_trait_object, DynClone };
 
 use std::hash::Hasher;
 use std::collections::hash_map::DefaultHasher;
-
-fn from_euler_yxz(x: f64, y: f64, z: f64) -> UnitQuaternion<f64> {
-
-    let x_axis = nalgebra::Vector3::<f64>::x_axis();
-    let y_axis = nalgebra::Vector3::<f64>::y_axis();
-    let z_axis = nalgebra::Vector3::<f64>::z_axis();
-    
-    let rot_x = Rotation3::from_axis_angle(&x_axis, x);
-    let rot_y = Rotation3::from_axis_angle(&y_axis, y + std::f64::consts::FRAC_PI_2);
-    let rot_z = Rotation3::from_axis_angle(&z_axis, z);
-
-    let correction = Rotation3::from_axis_angle(&z_axis, std::f64::consts::FRAC_PI_2) * Rotation3::from_axis_angle(&y_axis, std::f64::consts::FRAC_PI_2);
-
-    let combined_rot = rot_z * rot_x * rot_y * correction;
-    UnitQuaternion::from_rotation_matrix(&combined_rot)
-}
-
-fn lock_horizon_angle(q: UnitQuaternion<f64>, roll_correction: f64) -> UnitQuaternion<f64> {
-    // z axis points in view direction, use as reference
-    let axis = nalgebra::Vector3::<f64>::y_axis();
-
-    // let x_axis = nalgebra::Vector3::<f64>::x_axis();
-    let y_axis = nalgebra::Vector3::<f64>::y_axis();
-    let z_axis = nalgebra::Vector3::<f64>::z_axis();
-
-    let corrected_transform = q.to_rotation_matrix() * Rotation3::from_axis_angle(&y_axis, -std::f64::consts::FRAC_PI_2) * Rotation3::from_axis_angle(&z_axis, -std::f64::consts::FRAC_PI_2);
-    // since this coincides with roll axis, the roll is neglected when transformed back
-    let axis_transformed = corrected_transform * axis;
-
-    let pitch = (axis_transformed.z).asin();
-    let yaw = axis_transformed.y.simd_atan2(axis_transformed.x) - std::f64::consts::FRAC_PI_2;
-    
-    from_euler_yxz(pitch, roll_correction, yaw)
-}
+use crate::stabilization_params::StabilizationParams;
 
 pub trait SmoothingAlgorithm: DynClone {
     fn get_name(&self) -> String;
@@ -58,10 +24,11 @@ pub trait SmoothingAlgorithm: DynClone {
     fn get_parameters_json(&self) -> serde_json::Value;
     fn get_status_json(&self) -> serde_json::Value;
     fn set_parameter(&mut self, name: &str, val: f64);
+    fn set_horizon_lock(&mut self, lock_percent: f64, roll: f64);
 
     fn get_checksum(&self) -> u64;
 
-    fn smooth(&mut self, quats: &TimeQuat, duration: f64, _params: &crate::BasicParams) -> TimeQuat;
+    fn smooth(&mut self, quats: &TimeQuat, duration: f64, _stabilization_params: &StabilizationParams) -> TimeQuat;
 }
 clone_trait_object!(SmoothingAlgorithm);
 
@@ -78,10 +45,9 @@ impl Default for Smoothing {
         Self {
             algs: vec![
                 Box::new(self::none::None::default()),
+                Box::new(self::default_algo::DefaultAlgo::default()),
+                Box::new(self::default_algo_2::DefaultAlgo2::default()),
                 Box::new(self::plain::Plain::default()),
-                // Box::new(self::velocity_dampened_v1::VelocityDampened::default()),
-                Box::new(self::velocity_dampened::VelocityDampened::default()),
-                Box::new(self::velocity_dampened_axis::VelocityDampenedAxis::default()),
                 Box::new(self::velocity_dampened_advanced::VelocityDampenedAdvanced::default()),
                 Box::new(self::fixed::Fixed::default())
             ],
@@ -125,7 +91,7 @@ impl Smoothing {
         self.algs.iter().map(|x| x.get_name()).collect()
     }
 
-    pub fn get_max_angles(quats: &TimeQuat, smoothed_quats: &TimeQuat, params: &crate::BasicParams) -> (f64, f64, f64) { // -> (pitch, yaw, roll) in deg
+    pub fn get_max_angles(quats: &TimeQuat, smoothed_quats: &TimeQuat, params: &StabilizationParams) -> (f64, f64, f64) { // -> (pitch, yaw, roll) in deg
         let start_ts = (params.trim_start * params.get_scaled_duration_ms() * 1000.0) as i64;
         let end_ts   = (params.trim_end   * params.get_scaled_duration_ms() * 1000.0) as i64;
         let identity_quat = crate::Quat64::identity();

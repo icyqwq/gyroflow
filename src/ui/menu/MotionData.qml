@@ -21,7 +21,7 @@ MenuItem {
         id: fileDialog;
         property var extensions: [
             "csv", "txt", "bbl", "bfl", "mp4", "mov", "mxf", "insv", "gcsv", "360", 
-            "CSV", "TXT", "BBL", "BFL", "MP4", "MOV", "MXF", "INSV", "GCSV"
+            "CSV", "TXT", "BBL", "BFL", "MP4", "MOV", "MXF", "INSV", "GCSV", "log"
         ];
 
         title: qsTr("Choose a motion data file")
@@ -124,9 +124,10 @@ MenuItem {
             id: lpf;
             unit: qsTr("Hz");
             precision: 2;
-            value: 0;
+            value: 50;
             from: 0;
             width: parent.width;
+            tooltip: qsTr("Lower cutoff frequency means more filtering");
             onValueChanged: {
                 controller.set_imu_lpf(lpfcb.checked? value : 0);
             }
@@ -202,7 +203,7 @@ MenuItem {
             width: parent.width;
             tooltip: hasQuaternions && currentIndex === 0? qsTr("Use built-in quaternions instead of IMU data") : qsTr("IMU integration method for calculating motion data");
             function setMethod() {
-                Qt.callLater(() => controller.set_integration_method(hasQuaternions? currentIndex : currentIndex + 1));
+                controller.set_integration_method(hasQuaternions? currentIndex : currentIndex + 1);
             }
             onCurrentIndexChanged: Qt.callLater(integrator.setMethod);
             onHasQuaternionsChanged: Qt.callLater(integrator.setMethod);

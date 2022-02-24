@@ -40,26 +40,16 @@ fn entry() {
     #[cfg(target_os = "windows")]
     unsafe { winapi::um::wincon::AttachConsole(winapi::um::wincon::ATTACH_PARENT_PROCESS); }
 
-    let log_config = simplelog::ConfigBuilder::new()
-        .add_filter_ignore_str("mp4parse")
-        .add_filter_ignore_str("wgpu")
-        .add_filter_ignore_str("naga")
-        .add_filter_ignore_str("akaze")
-        .add_filter_ignore_str("ureq")
-        .add_filter_ignore_str("rustls")
-        .build();
-
-    #[cfg(target_os = "android")]
-    simplelog::WriteLogger::init(simplelog::LevelFilter::Debug, log_config, util::AndroidLog::default()).unwrap();
-
-    #[cfg(not(target_os = "android"))]
-    simplelog::TermLogger::init(simplelog::LevelFilter::Debug, log_config, simplelog::TerminalMode::Mixed, simplelog::ColorChoice::Auto).unwrap();
-
-    qmetaobject::log::init_qt_to_rust();
+    let _ = util::install_crash_handler();
+    util::init_logging();
 
     crate::resources::rsrc();
     qml_video_rs::register_qml_types();
     qml_register_type::<TimelineGyroChart>(cstr::cstr!("Gyroflow"), 1, 0, cstr::cstr!("TimelineGyroChart"));
+
+    // rendering::set_gpu_type_from_name("nvidia");
+    // rendering::test();
+    // return;
 
     let icons_path = if ui_live_reload {
         QString::from(format!("{}/resources/icons/", env!("CARGO_MANIFEST_DIR")))
@@ -78,6 +68,9 @@ fn entry() {
         // QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
         // QQuickWindow::setGraphicsApi(QSGRendererInterface::Vulkan);
     });
+    // if cfg!(target_os = "android") {
+    //     cpp!(unsafe [] { QQuickWindow::setGraphicsApi(QSGRendererInterface::Vulkan); });
+    // }
 
     if cfg!(target_os = "android") || cfg!(target_os = "ios") {
         MDKVideoItem::setGlobalOption("MDK_KEY", "B75BC812C266C3E2D967840494C8866773E4E5FC596729F7D9895BFB2DB3B9AE2515F306FBF29BF20290E1093E9A5B5796B778F866F5F631831\
@@ -86,10 +79,6 @@ fn entry() {
         MDKVideoItem::setGlobalOption("MDK_KEY", "47FA7B212D5FF2F649A245E6D8DC2D88BAB67C208282CB3E2DEB95B9B4F9EC575102303FB92448ED49454E027A31B48ED08824EB904B58F693AD\
             B52FA63A4008B80584DE2D5F0D09B65DBA192723D277B8B67447FBF0A4584184E2659155D95CFBEB08626CBE3C94416B2FC50B1FA1201AA7381CE3E85DF3F3BF9BCB59677808");
     }
-
-    // if cfg!(target_os = "android") {
-    //     cpp!(unsafe [] { QQuickWindow::setGraphicsApi(QSGRendererInterface::Vulkan); });
-    // }
 
     let ctl = RefCell::new(controller::Controller::new());
     let ctlpinned = unsafe { QObjectPinned::new(&ctl) };

@@ -199,7 +199,14 @@ Item {
 
                         scrollbar.position = visibleAreaLeft;
                     } else {
-                        root.setPosition(Math.max(0.0, Math.min(1.0, root.mapFromVisibleArea(mouseX / parent.width))));
+                        const newPos = Math.max(0.0, Math.min(1.0, root.mapFromVisibleArea(mouseX / parent.width)));
+                        const currentX = root.mapToVisibleArea(root.position) * parent.width;
+                        if (pressedButtons & Qt.RightButton) {
+                            if (Math.abs(mouseX - currentX) > 100) // If right click was more than 100px away from the current playhead
+                                root.setPosition(newPos);
+                        } else {
+                            root.setPosition(newPos);
+                        }
                     }
                 }
             }
@@ -230,7 +237,17 @@ Item {
                 chart.vscale = 1.0;
             }
             onWheel: (wheel) => {
-                if (wheel.modifiers & Qt.ControlModifier) {
+                if ((wheel.modifiers & Qt.AltModifier) || (wheel.modifiers & Qt.MetaModifier)) {
+                    const factor = (wheel.angleDelta.x / 120) / 10;
+                    chart.vscale += factor;
+                } else if ((wheel.modifiers & Qt.ControlModifier)) { // move horizontally
+                    const remainingWindow = (root.visibleAreaRight - root.visibleAreaLeft);
+                    const factor = (wheel.angleDelta.y / 120) / (50 / remainingWindow);
+                    root.visibleAreaLeft  = Math.min(root.visibleAreaRight, Math.max(0.0, Math.min(1-remainingWindow, root.visibleAreaLeft + factor)));
+                    root.visibleAreaRight = Math.max(root.visibleAreaLeft,  Math.min(1.0, Math.max(remainingWindow, root.visibleAreaRight + factor)));
+
+                    scrollbar.position = root.visibleAreaLeft;
+                } else { // zoom by default
                     const remainingWindow = (root.visibleAreaRight - root.visibleAreaLeft);
 
                     const factor = (wheel.angleDelta.y / 120) / (10 / remainingWindow);
@@ -239,10 +256,6 @@ Item {
                     root.visibleAreaRight = Math.max(root.visibleAreaLeft,  Math.min(1.0, root.visibleAreaRight - factor * (1.0 - xPosFactor)));
 
                     scrollbar.position = root.visibleAreaLeft;
-                }
-                if ((wheel.modifiers & Qt.AltModifier) || (wheel.modifiers & Qt.MetaModifier)) {
-                    const factor = (wheel.angleDelta.x / 120) / 10;
-                    chart.vscale += factor;
                 }
             }
         }
@@ -261,7 +274,7 @@ Item {
                 icon.name: "plus";
                 text: qsTr("Add calibration point");
                 onTriggered: {
-                    const pos = (root.mapFromVisibleArea(timelineContextMenu.pressedX / ma.width));
+                    const pos = root.position; // (root.mapFromVisibleArea(timelineContextMenu.pressedX / ma.width));
                     controller.add_calibration_point(pos * root.durationMs * 1000);
                 }
             }
@@ -271,7 +284,7 @@ Item {
                 icon.name: "spinner";
                 text: qsTr("Auto sync here");
                 onTriggered: {
-                    const pos = (root.mapFromVisibleArea(timelineContextMenu.pressedX / ma.width));
+                    const pos = root.position; // (root.mapFromVisibleArea(timelineContextMenu.pressedX / ma.width));
                     controller.start_autosync(pos, window.sync.initialOffset * 1000, window.sync.syncSearchSize * 1000, window.sync.timePerSyncpoint * 1000, window.sync.everyNthFrame, false);
                 }
             }
@@ -280,7 +293,7 @@ Item {
                 icon.name: "plus";
                 text: qsTr("Add manual sync point here");
                 onTriggered: {
-                    const pos = (root.mapFromVisibleArea(timelineContextMenu.pressedX / ma.width)) * root.durationMs * 1000;
+                    const pos = root.position * root.durationMs * 1000; // (root.mapFromVisibleArea(timelineContextMenu.pressedX / ma.width)) * root.durationMs * 1000;
                     const offset = controller.offset_at_timestamp(pos);
                     const final_pos = Math.round(pos - offset * 1000);
                     const final_offset = controller.offset_at_timestamp(final_pos)
@@ -299,7 +312,7 @@ Item {
                 icon.name: "readout_time";
                 text: qsTr("Estimate rolling shutter here");
                 onTriggered: {
-                    const pos = (root.mapFromVisibleArea(timelineContextMenu.pressedX / ma.width));
+                    const pos = root.position; // (root.mapFromVisibleArea(timelineContextMenu.pressedX / ma.width));
 
                     const text = qsTr("Your video needs to be already synced properly and you should use this function\non a part of your video with significant camera motion (ideally horizontal).\n\n" + 
                                       "This feature is experimental, the results may not be correct at all.\n" + 
@@ -349,7 +362,7 @@ Item {
 
         // Handle
         Rectangle {
-            x: Math.max(0, root.mapToVisibleArea(root.position) * (parent.width) - width / 2)
+            x: Math.max(0, (root.mapToVisibleArea(root.position) * parent.width) - width / 2)
             y: (parent.height - height) / 2
             radius: width;
             height: parent.height;
@@ -484,7 +497,7 @@ Item {
             id: syncPointEditField;
 
             width: 90 * dpiScale;
-            precision: 4;
+            precision: 3;
             unit: qsTr("ms");
             anchors.verticalCenter: parent.verticalCenter;
             property bool preventChange: true;
@@ -524,9 +537,10 @@ Item {
         width: parent.width; 
         anchors.bottom: parent.bottom;
         ToolTip {
-            text: qsTr("%1 to zoom horizontally, %2 to zoom vertically, double click to reset zoom")
-                    .arg(Qt.platform.os == "osx"? "<b>" + qsTr("Command+Scroll") + "</b>" : "<b>" + qsTr("Ctrl+Scroll") + "</b>")
-                    .arg(Qt.platform.os == "osx"? "<b>" + qsTr("Control+Scroll") + "</b>" : "<b>" + qsTr("Alt+Scroll") + "</b>");
+            text: qsTr("%1 to zoom horizontally, %2 to zoom vertically, %3 to pan, double click to reset zoom")
+                    .arg("<b>" + qsTr("Scroll") + "</b>")
+                    .arg("<b>" + (Qt.platform.os == "osx"? qsTr("Control+Scroll") : qsTr("Alt+Scroll")) + "</b>")
+                    .arg("<b>" + (Qt.platform.os == "osx"? qsTr("Command+Scroll") : qsTr("Ctrl+Scroll")) + "</b>");
             visible: ma.containsMouse;
             delay: 2000;
         }

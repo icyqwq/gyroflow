@@ -35,7 +35,7 @@ pub struct AutosyncProcess {
 
 impl AutosyncProcess {
     pub fn from_manager<T: crate::undistortion::PixelType>(stab: &StabilizationManager<T>, method: u32, timestamps_fract: &[f64], initial_offset: f64, sync_search_size: f64, mut sync_duration_ms: f64, every_nth_frame: u32, for_rs: bool) -> Result<Self, ()> {
-        let params = stab.params.read(); 
+        let params = stab.params.read();
         let frame_count = params.frame_count;
         let org_fps = params.fps;
         let scaled_fps = params.get_scaled_fps();
@@ -188,6 +188,7 @@ impl AutosyncProcess {
         }
         self.estimator.process_detected_frames(self.frame_count as usize, self.duration_ms, self.org_fps, self.scaled_fps);
         self.estimator.recalculate_gyro_data(self.frame_count as usize, self.duration_ms, self.org_fps, true);
+        self.estimator.optical_flow(1);
 
         if let Some(cb) = &self.finished_cb {
             if self.for_rs {

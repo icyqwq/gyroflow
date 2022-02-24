@@ -73,9 +73,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.53"
+version = "1.0.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94a45b455c14666b85fc40a019e8ab9eb75e3a124e05494f5397122bc9eb06e0"
+checksum = "159bb86af3a200e19a068f4224eae4c8bb2d0fa054c7e5d1cacd5cef95e684cd"
 
 [[package]]
 name = "approx"
@@ -286,6 +286,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d8c1fef690941d3e7788d328517591fecc684c084084702d6ff1641e993699a"
 
 [[package]]
+name = "breakpad-sys"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d7d4bd80f98519db02af69b5aec85253a9cb5e83654f4ffbd7fc8e552dfe2c7"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "bstr"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -323,9 +332,9 @@ checksum = "c4872d67bab6358e59559027aa3b9157c53d9358c51423c17554809a8858e0f8"
 
 [[package]]
 name = "cc"
-version = "1.0.72"
+version = "1.0.73"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22a9137b95ea06864e018375b72adfb7db6e6f68cfc8df5a04d00288050485ee"
+checksum = "2fff2a6927b3bb87f9595d67196a70493f627687a71d87a0d692242c33f58c11"
 dependencies = [
  "jobserver",
 ]
@@ -860,8 +869,9 @@ dependencies = [
 
 [[package]]
 name = "ffmpeg-next"
-version = "4.4.0-next.2"
-source = "git+https://github.com/zmwangx/rust-ffmpeg#5ed41c84ff877dc9ae9bd76412c86ee03afb5282"
+version = "5.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70a1fc87054b079ade0b081b023c5fef309cd4bbcb569c09eed2aa39b25a0a11"
 dependencies = [
  "bitflags",
  "ffmpeg-sys-next",
@@ -870,9 +880,9 @@ dependencies = [
 
 [[package]]
 name = "ffmpeg-sys-next"
-version = "4.4.0-next.2"
+version = "5.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f9e77559eab181635fe5b7e6ee024f54fd6cbd2dc4d0de145de95400ae17d26"
+checksum = "6ba12dea33516e30c160ce557c7e43dd857276368eb1cd0eef4fce6529f2dee5"
 dependencies = [
  "bindgen",
  "cc",
@@ -954,9 +964,9 @@ dependencies = [
 
 [[package]]
 name = "getrandom"
-version = "0.2.4"
+version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "418d37c8b1d42553c93648be529cb70f920d3baf8ef469b74b9638df426e0b4c"
+checksum = "d39cd93900197114fa1fcb7ae84ca742095eed9442088988ae74fa744e930e77"
 dependencies = [
  "cfg-if 1.0.0",
  "libc",
@@ -1038,8 +1048,9 @@ dependencies = [
 
 [[package]]
 name = "gyroflow"
-version = "1.0.0-rc2"
+version = "1.0.0-rc4"
 dependencies = [
+ "breakpad-sys",
  "bytemuck",
  "cpp",
  "cpp_build",
@@ -1054,18 +1065,19 @@ dependencies = [
  "qmetaobject",
  "qml-video-rs",
  "qttypes",
- "semver 1.0.5",
+ "semver 1.0.6",
  "serde_json",
  "simplelog",
  "ureq",
  "whoami",
  "winapi",
+ "windows",
  "winres",
 ]
 
 [[package]]
 name = "gyroflow-core"
-version = "1.0.0-rc2"
+version = "1.0.0-rc4"
 dependencies = [
  "ahrs",
  "akaze",
@@ -1096,7 +1108,7 @@ dependencies = [
  "opencv",
  "parking_lot 0.12.0",
  "pollster",
- "rand 0.8.4",
+ "rand 0.8.5",
  "rand_xoshiro",
  "rayon",
  "sample-consensus",
@@ -1219,9 +1231,9 @@ dependencies = [
 
 [[package]]
 name = "integer-encoding"
-version = "3.0.2"
+version = "3.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90c11140ffea82edce8dcd74137ce9324ec24b3cf0175fc9d7e29164da9915b8"
+checksum = "0e85a1509a128c855368e135cffcde7eac17d8e1083f41e2b98c58bc1a5074be"
 
 [[package]]
 name = "itertools"
@@ -1314,9 +1326,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.117"
+version = "0.2.119"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e74d72e0f9b65b5b4ca49a346af3976df0f9c61d550727f349ecd559f251a26c"
+checksum = "1bf2e165bb3457c8e098ea76f3e3bc9db55f87aa90d52d0e6be741470916aaa4"
 
 [[package]]
 name = "libloading"
@@ -1342,9 +1354,9 @@ checksum = "33a33a362ce288760ec6a508b94caaec573ae7d3bbbd91b87aa0bad4456839db"
 
 [[package]]
 name = "libmimalloc-sys"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9636c194f9db483f4d0adf2f99a65011a99f904bd222bbd67fb4df4f37863c30"
+checksum = "7705fc40f6ed493f73584abbb324e74f96b358ff60dfe5659a0f8fc12c590a69"
 dependencies = [
  "cc",
 ]
@@ -1452,9 +1464,9 @@ dependencies = [
 
 [[package]]
 name = "mimalloc"
-version = "0.1.27"
+version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf5f78c1d9892fb5677a8b2f543f967ab891ac0f71feecd961435b74f877283a"
+checksum = "b0dfa131390c2f6bdb3242f65ff271fcdaca5ff7b6c08f28398be7f2280e3926"
 dependencies = [
  "libmimalloc-sys",
 ]
@@ -1834,9 +1846,9 @@ checksum = "da32515d9f6e6e489d7bc9d84c71b060db7247dc035bbe44eac88cf87486d8d5"
 
 [[package]]
 name = "opencv"
-version = "0.61.3"
+version = "0.63.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "506c8ad1878c48f2c6549a1c6f449efc3f295dfadfb9a37ff2961c6a5e86fa52"
+checksum = "a9136cdb5d60249b61915f2b2dd98297c6ca213f785d4c01644479f7475b0832"
 dependencies = [
  "cc",
  "clang",
@@ -1848,16 +1860,16 @@ dependencies = [
  "once_cell",
  "opencv-binding-generator",
  "pkg-config",
- "semver 1.0.5",
+ "semver 1.0.6",
  "shlex",
  "vcpkg",
 ]
 
 [[package]]
 name = "opencv-binding-generator"
-version = "0.39.0"
+version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3363b72f9dc5f8d94b5cafae6d991c254f33784c7a5fcac3db0c8b203900df60"
+checksum = "c69003fad8fb8b35d4eaade050d54219546050df9a366484c9f46293164f5f1f"
 dependencies = [
  "clang",
  "clang-sys",
@@ -2007,9 +2019,9 @@ checksum = "12e07b550a7cbfcaa567bcd28042919548016ad615b5731633fa5239992d853f"
 
 [[package]]
 name = "primal-sieve"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd0113d948c8f955a7ae96520023fe1e730eadbf26e67c4452f801a485e9d357"
+checksum = "70534ba41dd05a43504de90bd27437442aa4a0067187e3c09725d14b0ada4e5b"
 dependencies = [
  "primal-bit",
  "primal-estimate",
@@ -2056,8 +2068,8 @@ dependencies = [
 
 [[package]]
 name = "qmetaobject"
-version = "0.2.5"
-source = "git+https://github.com/AdrianEddy/qmetaobject-rs.git?branch=android_build_fix#032d74407288510d8a2a9f5da2c251e4cae14f2a"
+version = "0.2.7"
+source = "git+https://github.com/AdrianEddy/qmetaobject-rs.git#aa91b6d06cd8bc7579d77787253e31c7fabc86f8"
 dependencies = [
  "cpp",
  "cpp_build",
@@ -2065,13 +2077,13 @@ dependencies = [
  "log",
  "qmetaobject_impl",
  "qttypes",
- "semver 1.0.5",
+ "semver 1.0.6",
 ]
 
 [[package]]
 name = "qmetaobject_impl"
-version = "0.2.5"
-source = "git+https://github.com/AdrianEddy/qmetaobject-rs.git?branch=android_build_fix#032d74407288510d8a2a9f5da2c251e4cae14f2a"
+version = "0.2.7"
+source = "git+https://github.com/AdrianEddy/qmetaobject-rs.git#aa91b6d06cd8bc7579d77787253e31c7fabc86f8"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2081,7 +2093,7 @@ dependencies = [
 [[package]]
 name = "qml-video-rs"
 version = "0.1.0"
-source = "git+https://github.com/AdrianEddy/qml-video-rs.git#6adbab509cabfe2f1a1019865411af2a1e3f0ee7"
+source = "git+https://github.com/AdrianEddy/qml-video-rs.git#e1c471d7bd55abb7c41cd4d364980d857970547d"
 dependencies = [
  "cpp",
  "cpp_build",
@@ -2093,12 +2105,12 @@ dependencies = [
 
 [[package]]
 name = "qttypes"
-version = "0.2.6"
-source = "git+https://github.com/AdrianEddy/qmetaobject-rs.git?branch=android_build_fix#032d74407288510d8a2a9f5da2c251e4cae14f2a"
+version = "0.2.7"
+source = "git+https://github.com/AdrianEddy/qmetaobject-rs.git#aa91b6d06cd8bc7579d77787253e31c7fabc86f8"
 dependencies = [
  "cpp",
  "cpp_build",
- "semver 1.0.5",
+ "semver 1.0.6",
 ]
 
 [[package]]
@@ -2141,14 +2153,13 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.8.4"
+version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e7573632e6454cf6b99d7aac4ccca54be06da05aca2ef7423d22d27d4d4bcd8"
+checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
 dependencies = [
  "libc",
  "rand_chacha",
  "rand_core 0.6.3",
- "rand_hc",
 ]
 
 [[package]]
@@ -2183,15 +2194,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d34f1408f55294453790c48b2f1ebbb1c5b4b7563eb1f418bcfcfdbb06ebb4e7"
 dependencies = [
  "getrandom",
-]
-
-[[package]]
-name = "rand_hc"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d51e9f596de227fda2ea6c84607f5558e196eeaf43c986b724ba4fb8fdf497e7"
-dependencies = [
- "rand_core 0.6.3",
 ]
 
 [[package]]
@@ -2344,14 +2346,14 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfa0f585226d2e68097d4f95d113b15b83a82e819ab25717ec0590d9584ef366"
 dependencies = [
- "semver 1.0.5",
+ "semver 1.0.6",
 ]
 
 [[package]]
 name = "rustls"
-version = "0.20.2"
+version = "0.20.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d37e5e2290f3e040b594b1a9e04377c2c671f1a1cfd9bfdef82106ac1c113f84"
+checksum = "4fbfeb8d0ddb84706bc597a5574ab8912817c52a397f819e5b614e2265206921"
 dependencies = [
  "log",
  "ring",
@@ -2419,9 +2421,9 @@ checksum = "d4f410fedcf71af0345d7607d246e7ad15faaadd49d240ee3b24e5dc21a820ac"
 
 [[package]]
 name = "semver"
-version = "1.0.5"
+version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0486718e92ec9a68fbed73bb5ef687d71103b142595b406835649bebd33f72c7"
+checksum = "a4a3381e03edd24287172047536f20cabde766e2cd3e65e6b00fb3af51c4f38d"
 
 [[package]]
 name = "serde"
@@ -2445,9 +2447,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.78"
+version = "1.0.79"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d23c1ba4cf0efd44be32017709280b32d1cea5c3f1275c3b6d9e8bc54f758085"
+checksum = "8e8d9fa5c3b304765ce1fd9c4c8a3de2c8db365a5b91be52f186efc675681d95"
 dependencies = [
  "indexmap",
  "itoa 1.0.1",
@@ -2565,7 +2567,7 @@ checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 [[package]]
 name = "telemetry-parser"
 version = "0.1.8"
-source = "git+https://github.com/AdrianEddy/telemetry-parser.git#665f9b0a4f5d62cf93be9f747c739a8cdc0e85ac"
+source = "git+https://github.com/AdrianEddy/telemetry-parser.git#d14cf06a04ab7a0770fb0c51d3545dfe304f32e9"
 dependencies = [
  "argh",
  "byteorder",
@@ -3011,6 +3013,19 @@ name = "winapi-x86_64-pc-windows-gnu"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
+
+[[package]]
+name = "windows"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fbedf6db9096bc2364adce0ae0aa636dcd89f3c3f2cd67947062aaf0ca2a10ec"
+dependencies = [
+ "windows_aarch64_msvc",
+ "windows_i686_gnu",
+ "windows_i686_msvc",
+ "windows_x86_64_gnu",
+ "windows_x86_64_msvc",
+]
 
 [[package]]
 name = "windows-sys"

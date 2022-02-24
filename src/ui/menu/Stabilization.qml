@@ -75,6 +75,22 @@ MenuItem {
     function getSmoothingParam(name, defaultValue) {
         return settings.value("smoothing-" + smoothingMethod.currentIndex + "-" + name, defaultValue);
     }
+    function getParamElement(name) {
+        function traverseChildren(node) {
+            for (let i = node.children.length; i > 0; --i) {
+                const child = node.children[i - 1];
+                if (child) {
+                    if (child.objectName == ("param-" + name)) {
+                        return child;
+                    }
+                    const found = traverseChildren(child);
+                    if (found !== null) return found;
+                }
+            }
+            return null;
+        }
+        return traverseChildren(smoothingOptions);
+    }
 
     Connections {
         target: controller;
@@ -124,9 +140,11 @@ MenuItem {
     
     Component.onCompleted: {
         QT_TRANSLATE_NOOP("Popup", "No smoothing");
+        QT_TRANSLATE_NOOP("Popup", "Default"),
         QT_TRANSLATE_NOOP("Popup", "Plain 3D");
         QT_TRANSLATE_NOOP("Popup", "Velocity dampened"),
         QT_TRANSLATE_NOOP("Popup", "Velocity dampened per axis"),
+        QT_TRANSLATE_NOOP("Popup", "Velocity dampened (advanced)"),
         // QT_TRANSLATE_NOOP("Popup", "Velocity dampened 2"),
         QT_TRANSLATE_NOOP("Popup", "Fixed camera");
         // QT_TRANSLATE_NOOP("Popup", "Lock horizon"),
@@ -135,6 +153,8 @@ MenuItem {
         QT_TRANSLATE_NOOP("Stabilization", "Yaw smoothness");
         QT_TRANSLATE_NOOP("Stabilization", "Roll smoothness");
         QT_TRANSLATE_NOOP("Stabilization", "Smoothness");
+        QT_TRANSLATE_NOOP("Stabilization", "Per axis");
+        QT_TRANSLATE_NOOP("Stabilization", "Max smoothness");
         QT_TRANSLATE_NOOP("Stabilization", "Yaw angle correction");
         QT_TRANSLATE_NOOP("Stabilization", "Pitch angle correction");
         QT_TRANSLATE_NOOP("Stabilization", "Roll angle correction");
@@ -185,12 +205,18 @@ MenuItem {
         }
     }
 
+    function updateHorizonLock() {
+        const lockAmount = horizonCb.checked? horizonSlider.value : 0.0;
+        const roll = horizonCb.checked? horizonRollSlider.value : 0.0;
+        controller.set_horizon_lock(lockAmount, roll);
+    }
+
     ComboBox {
         id: smoothingMethod;
         model: smoothingAlgorithms;
         font.pixelSize: 12 * dpiScale;
         width: parent.width;
-        currentIndex: 2;
+        currentIndex: 1;
         Component.onCompleted: currentIndexChanged();
         onCurrentIndexChanged: {
             // Clear current params
@@ -201,16 +227,20 @@ MenuItem {
             const opt_json = controller.set_smoothing_method(currentIndex);
             if (opt_json.length > 0) {
                 let qml = "import QtQuick; import '../components/'; Column { width: parent.width; ";
+                let adv_qml = "AdvancedSection { diff: 0; ";
                 for (const x of opt_json) {
                     // TODO: figure out a better way than constructing a string
+                    let str = "";
+                    const add = x.custom_qml || "";
                     switch (x.type) {
                         case 'Slider': 
                         case 'SliderWithField': 
-                        case 'NumberField': 
-                            qml += `Label {
+                        case 'NumberField':
+                            str = `Label {
                                 width: parent.width;
                                 spacing: 2 * dpiScale;
-                                text: qsTranslate("Stabilization", "${x.description}")
+                                text: qsTranslate("Stabilization", "${x.description}");
+                                objectName: "param-${x.name}-label";
                                 ${x.type} {
                                     width: parent.width;
                                     from: ${x.from};
@@ -219,23 +249,33 @@ MenuItem {
                                     defaultValue: ${x.default};
                                     objectName: "param-${x.name}";
                                     unit: qsTranslate("Stabilization", "${x.unit}");
-                                    //live: false;
                                     precision: ${x.precision} || 2;
                                     onValueChanged: root.setSmoothingParam("${x.name}", value);
+                                    ${add}
                                 }
                             }`;
                         break;
-                        case 'QML': qml += x.custom_qml; break;
+                        case 'CheckBox':
+                            str = `CheckBox {
+                                text: qsTranslate("Stabilization", "${x.description}")
+                                checked: +root.getSmoothingParam("${x.name}", ${x.default}) > 0;
+                                onCheckedChanged: root.setSmoothingParam("${x.name}", checked? 1 : 0);
+                                objectName: "param-${x.name}";
+                                Component.onCompleted: checkedChanged();
+                                ${add}
+                            }`;
+                        break;
+                        case 'QML': str = x.custom_qml; break;
                     }
+                    if (x.advanced) adv_qml += str
+                    else qml += str;
                 }
+                qml += adv_qml.length > 40? (adv_qml + "}") : "";
                 qml += "}";
 
                 Qt.createQmlObject(qml, smoothingOptions);
 
-                Qt.callLater(() => {
-                    root.setSmoothingParam("horizonlockpercent", horizonCb.cb.checked? horizonSlider.value : 0.0);
-                    root.setSmoothingParam("horizonroll", horizonCb.cb.checked? horizonRollSlider.value : 0.0);
-                });
+                Qt.callLater(updateHorizonLock);
             }
         }
     }
@@ -264,9 +304,9 @@ MenuItem {
     CheckBoxWithContent {
         id: horizonCb;
         text: qsTr("Lock horizon");
+
         cb.onCheckedChanged: {
-            root.setSmoothingParam("horizonlockpercent", cb.checked? horizonSlider.value : 0.0);
-            root.setSmoothingParam("horizonroll", cb.checked? horizonRollSlider.value : 0.0);
+            updateHorizonLock();
         }
 
         Label {
@@ -279,9 +319,9 @@ MenuItem {
                 to: 100;
                 width: parent.width;
                 unit: qsTr("%");
-                precision: 1;
-                value: root.getSmoothingParam("horizonlockpercent", 100);
-                onValueChanged: () => root.setSmoothingParam("horizonlockpercent", horizonSlider.value);
+                precision: 0;
+                value: 100;
+                onValueChanged: updateHorizonLock();
             }
         }
 
@@ -294,11 +334,11 @@ MenuItem {
                 width: parent.width;
                 from: -180;
                 to: 180;
-                value: root.getSmoothingParam("horizonroll", 0);
+                value: 0;
                 defaultValue: 0;
                 unit: qsTr("°");
                 precision: 1;
-                onValueChanged: root.setSmoothingParam("horizonroll", value);
+                onValueChanged: updateHorizonLock();
             }
         }
 

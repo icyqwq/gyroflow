@@ -5,6 +5,8 @@ use std::collections::HashSet;
 use itertools::Itertools;
 
 use serde::{ Serialize, Deserialize };
+use super::zooming;
+
 #[cfg(feature = "opencv")]
 use super::LensCalibrator;
 
@@ -73,6 +75,9 @@ impl LensProfile {
     pub fn load_from_file(&mut self, path: &str) -> Result<(), serde_json::Error> {
         let data = std::fs::read_to_string(path).map_err(|e| serde_json::Error::io(e))?;
         *self = Self::from_json(&data)?;
+
+        // Trust lens profiles loaded from file
+        self.official = true;
 
         if self.calibrator_version.is_empty() || self.fisheye_params.camera_matrix.is_empty() || self.calib_dimension.w <= 0 || self.calib_dimension.h <= 0 {
             return Err(serde_json::Error::io(std::io::ErrorKind::InvalidData.into()));
@@ -338,7 +343,7 @@ impl LensProfile {
         let distortion_coeffs = self.get_distortion_coeffs();
         params.distortion_coeffs = [distortion_coeffs[0], distortion_coeffs[1], distortion_coeffs[2], distortion_coeffs[3]];
 
-        let zoom = crate::AdaptiveZoom::from_compute_params(params);
+        let zoom = zooming::from_compute_params(params);
         zoom.compute(&[0.0]).first().map(|x| x.0).unwrap_or(1.0)
     }
 }

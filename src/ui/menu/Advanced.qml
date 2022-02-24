@@ -16,6 +16,7 @@ MenuItem {
         property alias previewResolution: previewResolution.currentIndex;
         property alias renderBackground: renderBackground.text;
         property alias theme: themeList.currentIndex;
+        property alias uiScaling: uiScaling.currentIndex;
         property alias safeAreaGuide: safeAreaGuide.checked;
         property alias gpudecode: gpudecode.checked;
         property string lang: ui_tools.get_default_language();
@@ -75,27 +76,45 @@ MenuItem {
     }
     Label {
         position: Label.Left;
+        text: qsTr("UI scaling");
+        ComboBox {
+            id: uiScaling;
+            model: ["50%", "75%", "100%", "125%", "150%", "175%", "200%"];
+            font.pixelSize: 12 * dpiScale;
+            width: parent.width;
+            currentIndex: 2;
+            onCurrentIndexChanged: {
+                ui_tools.set_scaling([0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0][currentIndex]);
+            }
+        }
+    }
+    Label {
+        position: Label.Left;
         text: qsTr("Language");
 
         ComboBox {
             id: langList;
             property var langs: [
-                ["English",                     "en"],
+                ["English",                      "en"],
                 ["Chinese - Simplified (简体中文)",  "zh_CN"],
                 ["Chinese - Traditional (繁體中文)", "zh_TW"],
-                ["Danish (dansk)",              "da"],
-                ["Finnish (suomi)",             "fi"],
-                ["French (français)",           "fr"],
-                ["German (Deutsch)",            "de"],
-                ["Italian (italiano)",          "it"],
-                ["Japanese (日本語)",            "ja"],
-                ["Norwegian (norsk)",           "no"],
-                ["Polish (polski)",             "pl"],
-                ["Portuguese (português)",      "pt"],
-                ["Russian (русский)",           "ru"],
-                ["Slovak (slovenský)",          "sk"],
-                ["Spanish (español)",           "es"],
-                ["Ukrainian (Українська мова)", "uk"]
+                ["Danish (dansk)",               "da"],
+                ["Finnish (suomi)",              "fi"],
+                ["French (français)",            "fr"],
+                ["Galician (Galego)",            "gl"],
+                ["German (Deutsch)",             "de"],
+                ["Greek (Ελληνικά)",             "el"],
+                ["Indonesian (Bahasa Indonesia)","id"],
+                ["Italian (italiano)",           "it"],
+                ["Japanese (日本語)",             "ja"],
+                ["Norwegian (norsk)",            "no"],
+                ["Polish (polski)",              "pl"],
+                ["Portuguese - Brazilian (português brasileiro)", "pt_BR"],
+                ["Portuguese (português)",       "pt"],
+                ["Russian (русский)",            "ru"],
+                ["Slovak (slovenský)",           "sk"],
+                ["Spanish (español)",            "es"],
+                ["Ukrainian (Українська мова)",  "uk"]
             ];
             Component.onCompleted: {
                 let selectedIndex = 0;

@@ -79,12 +79,16 @@ Gyroflow is an application that can stabilize your video by using motion data fr
 
 ## Supported gyro sources
 - [x] GoPro (HERO 5 and later)
-- [x] Sony (a1, a6600, a7c, a7r IV, a7 IV, a7s III, a9 II, FX3, FX6, RX0 II, RX100 VII, ZV1, ZV-E10)
-- [x] Insta360 (OneR, SMO 4k, GO2)
+- [x] Sony (a1, a7c, a7r IV, a7 IV, a7s III, a9 II, FX3, FX6, RX0 II, RX100 VII, ZV1, ZV-E10)
+- [x] Insta360 (OneR, SMO 4k, Go, GO2)
 - [x] Betaflight blackbox (CSV and binary)
-- [x] Mobile apps: `Sensor Logger`, `G-Field Recorder`, `Gyro`
-- [x] Runcam CSV (Runcam 5 Orange, iFlight GOCam GR)
+- [x] Runcam CSV (Runcam 5 Orange, iFlight GOCam GR, Runcam Thumb, Mobius Maxi 4K)
+- [x] Hawkeye Firefly X Lite CSV
 - [x] WitMotion (WT901SDCL binary and *.txt)
+- [x] iOS apps: `Sensor Logger`, [`G-Field Recorder`](https://apps.apple.com/at/app/g-field-recorder/id1154585693), [`Gyro`](https://apps.apple.com/us/app/gyro-record-device-motion-data/id1161532981)
+- [x] Android apps: [`Sensor Logger`](https://play.google.com/store/apps/details?id=com.kelvin.sensorapp&hl=de_AT&gl=US), [`Sensor Record`](https://play.google.com/store/apps/details?id=de.martingolpashin.sensor_record)
+- [x] Gyroflow [.gcsv log](https://docs.gyroflow.xyz/logging/gcsv/)
+- [x] ArduPilot VideoStabilization logging (*.log)
 
 ### Info for cameras not on the list
 
@@ -117,6 +121,8 @@ See the [open issues](https://github.com/gyroflow/gyroflow/issues) for a list of
 There's also a ton of TODO comments throughout the code.
 
 ### Video editor plugins 
+Gyroflow OpenFX plugin is available [here](https://github.com/gyroflow/gyroflow-ofx).
+
 Adobe After Effects and Davinci Resolve plugins are planned, but not ready yet
 
 ## Contributing
@@ -133,11 +139,15 @@ Currently *Gyroflow* is available in:
 * **Danish** (by [ElvinC](https://github.com/ElvinC))
 * **Finnish** (by Jesse Julkunen)
 * **French** (by KennyDorion)
+* **Galician** (by Martín Costas)
 * **German** (by [Grommi](https://github.com/Gro2mi) and [Nicecrash](https://github.com/B-nutze-RR))
+* **Greek** (by Stamatis Galiatsatos)
+* **Indonesian** (by Aloysius Puspandono)
 * **Italian** (by Rosario Casciello)
 * **Japanese** (by 井上康)
 * **Norwegian** (by [MiniGod](https://github.com/MiniGod) and [alexagv](https://github.com/alexagv))
 * **Polish** (by [AdrianEddy](https://github.com/AdrianEddy))
+* **Portuguese Brazilian** (by KallelGaNewk)
 * **Portuguese** (by Ricardo Pimentel)
 * **Russian** (by Андрей Гурьянов, redstar01 and lukdut)
 * **Slovak** (by Radovan Leitman)
@@ -183,7 +193,7 @@ The project also supports UI live reload, it's a super quick way of working with
 2. Clone the repo: `git clone https://github.com/gyroflow/gyroflow.git`
 3. Install dependencies to the `ext` directory: `cd gyroflow/ext`
     - `Qt 6.2.3` or higher: `pip3 install -U pip & pip3 install aqtinstall` then `aqt install-qt windows desktop 6.2.3 win64_msvc2019_64` or use the [official installer](https://www.qt.io/download-qt-installer)
-    - `FFmpeg 4.4`: download [ffmpeg 4.4 lite](https://sourceforge.net/projects/avbuild/files/windows-desktop/ffmpeg-4.4-windows-desktop-clang-gpl-lite.tar.xz/download) and unzip it to `ext/ffmpeg-4.4-windows-desktop-clang-gpl-lite`
+    - `FFmpeg 5.0`: download [ffmpeg 5.0 lite](https://sourceforge.net/projects/avbuild/files/windows-desktop/ffmpeg-5.0-windows-desktop-clang-gpl-lite.tar.xz/download) and unzip it to `ext/ffmpeg-5.0-windows-desktop-clang-gpl-lite`
     - vcpkg: `git clone --depth 1 https://github.com/Microsoft/vcpkg.git & .\vcpkg\bootstrap-vcpkg.bat -disableMetrics`
     - OpenCV: `.\vcpkg\vcpkg install "opencv[core]:x64-windows-release"`
     - OpenCL: `.\vcpkg\vcpkg install "opencl:x64-windows-release"`
@@ -198,18 +208,18 @@ The project also supports UI live reload, it's a super quick way of working with
 2. Install Xcode command line tools: `xcode-select --install`
 3. Clone the repo: `git clone https://github.com/gyroflow/gyroflow.git`
 4. Install dependencies: `cd gyroflow/ext && ./install-deps-mac.sh`
-5. Update PROJECT_DIR in `__env-macos.sh`
-6. Setup the environment in terminal: `source __env-macos.sh` - I do this in VS Code built-in terminal
-7. Compile and run: `cargo run --release`
-8. If it fails to run, do: `./_deployment/deploy-macos.sh` once
+5. For building on Apple M1, change `ffmpeg-x64_64` -> `ffmpeg-arm64` and `x64-osx-release` -> `arm64-osx` in `__env-macos.sh`
+6. Setup the environment in terminal: `./__env-macos.sh` - I do this in VS Code built-in terminal
+7. For some reason `DYLD_FALLBACK_LIBRARY_PATH` may be overwritten so export it again in terminal: `export DYLD_FALLBACK_LIBRARY_PATH="$(xcode-select --print-path)/Toolchains/XcodeDefault.xctoolchain/usr/lib/"` (if you have build errors, try the other one from __env-macos.sh)
+8. Compile and run: `cargo run --release`
+9. If it fails to run, do: `./_deployment/deploy-macos.sh` once
 
 ### Building on Linux
 1. Get latest stable Rust language from: https://rustup.rs/
 2. Clone the repo: `git clone https://github.com/gyroflow/gyroflow.git`
 3. Install dependencies: `cd gyroflow/ext && ./install-deps-linux.sh` (Debian based apt)
-4. Update PROJECT_DIR in `__env-linux.sh`
-5. Setup the environment in terminal: `source __env-linux.sh` - I do this in VS Code built-in terminal
-6. Compile and run: `cargo run --release`
+4. Setup the environment in terminal: `./__env-linux.sh` - I do this in VS Code built-in terminal
+5. Compile and run: `cargo run --release`
 
 ### Building for Android
 1. Android is not well supported yet, but the app can be built and somewhat works. So far only building on Windows was tested
@@ -221,6 +231,12 @@ The project also supports UI live reload, it's a super quick way of working with
 7. Update paths in `_deployment/build-android.ps1` and in `_deployment/android/android-deploy.json`
 8. Run `.\_deployment\build-android.ps1` in Powershell
 
+### Profiling on Windows
+1. Install and run `Visual Studio Community Edition`
+2. Compile and run GyroFlow with the `profile` profile: `cargo run --profile profile`
+3. In Visual Studio, go to `Debug -> Performance Profiler...`
+    - Under `Target`, open `Change Target` and select `Running Process...`, select the running `gyroflow.exe` process
+    
 ## License
 
 Distributed under the GPLv3 License. See [LICENSE](https://github.com/gyroflow/gyroflow/blob/main/LICENSE) for more information.

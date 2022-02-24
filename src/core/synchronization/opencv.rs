@@ -2,6 +2,7 @@
 // Copyright © 2021-2022 Adrian <adrian.eddy at gmail>
 
 use nalgebra::{ Rotation3, Matrix3, Vector4 };
+use std::collections::BTreeMap;
 use std::ffi::c_void;
 use opencv::core::{ Mat, Size, Point2f, TermCriteria, CV_8UC1 };
 use opencv::prelude::MatTraitConst;
@@ -14,6 +15,7 @@ pub struct ItemOpenCV {
     features: Mat,
     img_bytes: Vec<u8>,
     size: (i32, i32),
+    optical_flow: BTreeMap<usize, Option<(Vec<Point2f>, Vec<Point2f>)>>
 }
 unsafe impl Send for ItemOpenCV { }
 unsafe impl Sync for ItemOpenCV { }
@@ -41,7 +43,8 @@ impl ItemOpenCV {
         Self {
             features: pts,
             size: (w, h),
-            img_bytes: bytes
+            img_bytes: bytes,
+            optical_flow: BTreeMap::new()
         }
     }
     
@@ -53,6 +56,14 @@ impl ItemOpenCV {
             (pt.x, pt.y)
         } else {
             (0.0, 0.0)
+        }
+    }
+    pub fn rescale(&mut self, ratio: f32) {
+        use opencv::prelude::MatTrait;
+        for i in 0..self.features.rows() {
+            let mut pt = self.features.at_mut::<Point2f>(i).unwrap();
+            pt.x *= ratio;
+            pt.y *= ratio;
         }
     }
     
@@ -92,7 +103,7 @@ impl ItemOpenCV {
             
             let inliers = opencv::calib3d::recover_pose_triangulated(&e, &a1_pts, &a2_pts, &identity, &mut r1, &mut t, 100000.0, &mut mask, &mut Mat::default())?;
             if inliers < 20 {
-                return Err(opencv::Error::new(0, "Model not found".into()));
+                return Err(opencv::Error::new(0, "Model not found".to_string()));
             }
             
             cv_to_rot2(r1)
@@ -156,12 +167,24 @@ impl ItemOpenCV {
             }
         }
     }
-    pub fn get_matched_features_pair(&mut self, next: &mut Self, scale: f64) -> Option<(Vec<(f64, f64)>, Vec<(f64, f64)>)> {
-        let pts = self.get_matched_features(next)?;
-        Some((
-            pts.0.iter().map(|x| (x.x as f64 * scale, x.y as f64 * scale )).collect::<Vec<(f64, f64)>>(),
-            pts.1.iter().map(|x| (x.x as f64 * scale, x.y as f64 * scale )).collect::<Vec<(f64, f64)>>()
-        ))
+
+    pub fn optical_flow_to_frame(&mut self, to: &mut Self, frame_offset: usize, force_update: bool) {
+        if force_update || !self.optical_flow.contains_key(&frame_offset) {
+            let pts = self.get_matched_features(to);
+            self.optical_flow.insert(frame_offset, pts);
+        }
+    }
+
+    pub fn get_optical_flow_lines(&self, frame_offset: usize, scale: f64) -> Option<(Vec<(f64, f64)>, Vec<(f64, f64)>)> {
+        if let Some(&opt_pts) = self.optical_flow.get(&frame_offset).as_ref() {
+            if let Some(pts) = opt_pts {
+                return Some((
+                    pts.0.iter().map(|x| (x.x as f64 * scale, x.y as f64 * scale )).collect::<Vec<(f64, f64)>>(),
+                    pts.1.iter().map(|x| (x.x as f64 * scale, x.y as f64 * scale )).collect::<Vec<(f64, f64)>>()
+                ))
+            }
+        }
+        None
     }
 }
 
@@ -193,7 +216,7 @@ pub fn init() -> Result<(), opencv::Error> {
 
 fn cv_to_rot2(r1: Mat) -> Result<Rotation3<f64>, opencv::Error> {
     if r1.typ() != opencv::core::CV_64FC1 {
-        return Err(opencv::Error::new(0, "Invalid matrix type".into()));
+        return Err(opencv::Error::new(0, "Invalid matrix type".to_string()));
     }
     Ok(Rotation3::from_matrix_unchecked(nalgebra::Matrix3::new(
         *r1.at_2d::<f64>(0, 0)?, *r1.at_2d::<f64>(0, 1)?, *r1.at_2d::<f64>(0, 2)?,

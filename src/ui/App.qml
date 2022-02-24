@@ -51,14 +51,21 @@ Rectangle {
     property alias outputFile: outputFile.text;
     property alias sync: sync;
     property alias stab: stab;
+    property alias renderBtn: renderBtn;
 
     readonly property bool wasModified: window.videoArea.vid.loaded;
+
+    function togglePlay() {
+        window.videoArea.timeline.focus = true;
+        const vid = window.videoArea.vid;
+        if (vid.playing) vid.pause(); else vid.play();
+    }
 
     FileDialog {
         id: fileDialog;
         property var extensions: [
-            "mp4", "mov", "mxf", "mkv", "webm", "insv", "gyroflow",
-            "MP4", "MOV", "MXF", "MKV", "WEBM", "INSV", "GYROFLOW"
+            "mp4", "mov", "mxf", "mkv", "webm", "insv", "gyroflow", "png", "exr",
+            "MP4", "MOV", "MXF", "MKV", "WEBM", "INSV", "GYROFLOW", "PNG", "EXR"
         ];
 
         title: qsTr("Choose a video file")
@@ -133,6 +140,28 @@ Rectangle {
                         text: "";
                         anchors.verticalCenter: parent.verticalCenter;
                         width: exportbar.width - parent.children[0].width - exportbar.children[2].width - 30 * dpiScale;
+
+                        LinkButton {
+                            anchors.right: parent.right;
+                            height: parent.height - 1 * dpiScale;
+                            text: "...";
+                            font.underline: false;
+                            font.pixelSize: 15 * dpiScale;
+                            onClicked: {
+                                outputFileDialog.defaultSuffix = outputFile.text.substring(outputFile.text.length - 3);
+                                outputFileDialog.currentFile = controller.path_to_url(outputFile.text);
+                                outputFileDialog.open();
+                            }
+                        }
+                    }
+                    FileDialog {
+                        id: outputFileDialog;
+                        fileMode: FileDialog.SaveFile;
+                        title: qsTr("Select file destination");
+                        nameFilters: Qt.platform.os == "android"? undefined : [qsTr("Video files") + " (*.mp4 *.mov *.png)"];
+                        onAccepted: {
+                            outputFile.text = controller.url_to_path(outputFileDialog.selectedFile);
+                        }
                     }
                 }
 
@@ -156,20 +185,6 @@ Rectangle {
 
                     model: [QT_TRANSLATE_NOOP("Popup", "Export .gyroflow file (including gyro data)"), QT_TRANSLATE_NOOP("Popup", "Export .gyroflow file"), ];
 
-                    function doRender() {
-                        controller.render(
-                            exportSettings.outCodec, 
-                            exportSettings.outCodecOptions, 
-                            outputFile.text, 
-                            videoArea.trimStart, 
-                            videoArea.trimEnd, 
-                            exportSettings.outWidth, 
-                            exportSettings.outHeight, 
-                            exportSettings.outBitrate, 
-                            exportSettings.outGpu, 
-                            exportSettings.outAudio
-                        );
-                    }
                     function renameOutput() {
                         const orgOutput = outputFile.text;
                         let output = orgOutput;
@@ -180,18 +195,57 @@ Rectangle {
                         }
 
                         outputFile.text = output;
-                        clicked();
+                        render();
                     }
-                    onClicked: {
-                        if (controller.file_exists(outputFile.text)) {
+                    property bool allowFile: false;
+                    property bool allowLens: false;
+                    property bool allowSync: false;
+
+                    function render() {
+                        if (!controller.lens_loaded && !allowLens) {
+                            messageBox(Modal.Warning, qsTr("Lens profile is not loaded, your result will be incorrect. Are you sure you want to render this file?"), [
+                                { text: qsTr("Yes"), clicked: () => { allowLens = true; renderBtn.render(); }},
+                                { text: qsTr("No"), accent: true },
+                            ]);
+                            return;
+                        }
+                        const usesQuats = window.motionData.hasQuaternions && window.motionData.integrationMethod === 0 && window.motionData.filename == window.vidInfo.filename;
+                        if (!usesQuats && controller.offsets_model.rowCount() == 0 && !allowSync) {
+                            messageBox(Modal.Warning, qsTr("There are no sync points present, your result will be incorrect. Are you sure you want to render this file?"), [
+                                { text: qsTr("Yes"), clicked: () => { allowSync = true; renderBtn.render(); }},
+                                { text: qsTr("No"), accent: true },
+                            ]);
+                            return;
+                        }
+                        if (controller.file_exists(outputFile.text) && !allowFile) {
                             messageBox(Modal.NoIcon, qsTr("Output file already exists, do you want to overwrite it?"), [
-                                { text: qsTr("Yes"), clicked: doRender },
+                                { text: qsTr("Yes"), clicked: () => { allowFile = true; renderBtn.render(); } },
                                 { text: qsTr("Rename"), clicked: renameOutput },
                                 { text: qsTr("No"), accent: true },
                             ]);
-                        } else {
-                            doRender();
+                            return;
                         }
+
+                        controller.render(
+                            exportSettings.outCodec, 
+                            exportSettings.outCodecOptions, 
+                            outputFile.text, 
+                            videoArea.trimStart, 
+                            videoArea.trimEnd, 
+                            exportSettings.outWidth, 
+                            exportSettings.outHeight, 
+                            exportSettings.outBitrate, 
+                            exportSettings.outGpu, 
+                            exportSettings.outAudio,
+                            exportSettings.overridePixelFormat
+                        );
+                    }
+                    onClicked: {
+                        allowFile = false;
+                        allowLens = false;
+                        allowSync = false;
+                        exportSettings.overridePixelFormat = "";
+                        render();
                     }
                     popup.onClicked: (index) => {
                         controller.export_gyroflow(index == 1);
@@ -269,7 +323,8 @@ Rectangle {
     Connections {
         target: controller;
         function onError(text, arg, callback) {
-            messageBox(Modal.Error, qsTr(text).arg(arg), [ { "text": qsTr("Ok"), clicked: window[callback] } ]);
+            text = getReadableError(qsTr(text).arg(arg));
+            messageBox(Modal.Error, text, [ { "text": qsTr("Ok"), clicked: window[callback] } ]);
         }
         function onMessage(text, arg, callback) {
             messageBox(Modal.Info, qsTr(text).arg(arg), [ { "text": qsTr("Ok"), clicked: window[callback] } ]);
@@ -294,5 +349,14 @@ Rectangle {
         if (!isLandscape) {
             isLandscapeChanged();
         }
+    }
+
+    function getReadableError(text) {
+        if (text.includes("ffmpeg")) {
+            if (text.includes("Permission denied")) return qsTr("Permission denied. Unable to create or write file.\nChange the output path or run the program as administrator.\nMake sure you have write permissions to the target directory and make sure target file is not used by any other application.");
+            if (text.includes("required nvenc API version")) return qsTr("NVIDIA GPU driver is too old, GPU encoding will not work for this format.\nUpdate your NVIDIA drivers to the newest version: %1.\nIf the issue is still present after driver update, your GPU probably doesn't support GPU encoding with this format. Disable GPU encoding in this case.").arg("<a href=\"https://www.nvidia.com/download/index.aspx\">https://www.nvidia.com/download/index.aspx</a>");
+        }
+
+        return text;
     }
 }

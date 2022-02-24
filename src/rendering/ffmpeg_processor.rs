@@ -26,6 +26,8 @@ pub struct FfmpegProcessor<'a> {
     pub start_ms: Option<f64>,
     pub end_ms: Option<f64>,
 
+    pub decoder_fps: f64,
+
     ost_time_bases: Vec<Rational>,
 }
 
@@ -51,13 +53,14 @@ pub enum FFmpegError {
     CannotCreateGPUDecoding,
     NoFramesContext,
     ToHWBufferError(i32),
+    PixelFormatNotSupported((format::Pixel, Vec<format::Pixel>)),
     UnknownPixelFormat(format::Pixel),
     InternalError(ffmpeg_next::Error),
 }
 
 impl std::fmt::Display for FFmpegError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match *self {
+        match self {
             FFmpegError::EncoderNotFound             => write!(f, "Encoder not found"),
             FFmpegError::DecoderNotFound             => write!(f, "Decoder not found"),
             FFmpegError::NoSupportedFormats          => write!(f, "No supported formats"),
@@ -66,14 +69,15 @@ impl std::fmt::Display for FFmpegError {
             FFmpegError::ConverterEmpty              => write!(f, "Converter is null"),
             FFmpegError::FrameEmpty                  => write!(f, "Frame is null"),
             FFmpegError::NoHWTransferFormats         => write!(f, "No hardware transfer formats"),
-            FFmpegError::FromHWTransferError(i)  => write!(f, "Error transferring frame from the GPU: {:?}", ffmpeg_next::Error::Other { errno: i }),
-            FFmpegError::ToHWTransferError(i)    => write!(f, "Error transferring frame to the GPU: {:?}", ffmpeg_next::Error::Other { errno: i }),
-            FFmpegError::ToHWBufferError(i)      => write!(f, "Error getting HW transfer buffer to the GPU: {:?}", ffmpeg_next::Error::Other { errno: i }),
+            FFmpegError::FromHWTransferError(i) => write!(f, "Error transferring frame from the GPU: {:?}", ffmpeg_next::Error::Other { errno: *i }),
+            FFmpegError::ToHWTransferError(i)   => write!(f, "Error transferring frame to the GPU: {:?}", ffmpeg_next::Error::Other { errno: *i }),
+            FFmpegError::ToHWBufferError(i)     => write!(f, "Error getting HW transfer buffer to the GPU: {:?}", ffmpeg_next::Error::Other { errno: *i }),
             FFmpegError::NoFramesContext             => write!(f, "Empty hw frames context"),
             FFmpegError::CannotCreateGPUDecoding     => write!(f, "Unable to create HW devices context"),
             FFmpegError::NoGPUDecodingDevice         => write!(f, "Unable to create any HW decoding context"),
             FFmpegError::UnknownPixelFormat(v) => write!(f, "Unknown pixel format: {:?}", v),
-            FFmpegError::InternalError(e)      => write!(f, "ffmpeg error: {:?}", e),
+            FFmpegError::PixelFormatNotSupported(v) => write!(f, "Pixel format {:?} is not supported. Supported ones: {:?}", v.0, v.1),
+            FFmpegError::InternalError(e)     => write!(f, "ffmpeg error: {:?}", e),
         }
     }
 }
@@ -99,7 +103,7 @@ impl<'a> FfmpegProcessor<'a> {
         // format::context::input::dump(&input_context, 0, Some(path));
 
         let best_video_stream = unsafe {
-            let mut decoder = std::ptr::null_mut();
+            let mut decoder: *const ffi::AVCodec = std::ptr::null();
             let index = ffi::av_find_best_stream(input_context.as_mut_ptr(), media::Type::Video.into(), -1i32, -1i32, &mut decoder, 0);
             if index >= 0 && !decoder.is_null() {
                 Ok((Stream::wrap(&input_context, index as usize), decoder))
@@ -109,12 +113,17 @@ impl<'a> FfmpegProcessor<'a> {
         };
 
         let strm = best_video_stream?;
-        let mut stream = strm.0;
+        let stream = strm.0;
         let decoder = strm.1;
+
+        let decoder_fps = stream.rate().into();
+
+        let mut decoder_ctx = codec::context::Context::from_parameters(stream.parameters())?;
+        decoder_ctx.set_threading(ffmpeg_next::threading::Config { kind: ffmpeg_next::threading::Type::Frame, count: 3, safe: false });
 
         let mut hw_backend = String::new();
         if gpu_decoding {
-            let hw = ffmpeg_hw::init_device_for_decoding(gpu_decoder_index, decoder, &mut stream)?;
+            let hw = ffmpeg_hw::init_device_for_decoding(gpu_decoder_index, decoder, &mut decoder_ctx)?;
             super::append_log(&format!("Selected HW backend {:?} ({}) with format {:?}\n", hw.1, hw.2, hw.3));
             hw_backend = hw.2;
         }
@@ -131,12 +140,15 @@ impl<'a> FfmpegProcessor<'a> {
 
             start_ms: None,
             end_ms: None,
+
+            decoder_fps,
         
             video: VideoTranscoder {
                 gpu_encoding: true,
                 gpu_decoding,
                 input_index: stream.index(),
                 codec_options: Dictionary::new(),
+                decoder: Some(decoder_ctx.decoder().video()?),
                 ..VideoTranscoder::default()
             },
 
@@ -159,7 +171,7 @@ impl<'a> FfmpegProcessor<'a> {
         let mut octx = format::output(&output_path)?;
 
         for (i, stream) in self.input_context.streams().enumerate() {
-            let medium = stream.codec().medium();
+            let medium = stream.parameters().medium();
             if medium != media::Type::Audio && medium != media::Type::Video {
                 stream_mapping[i] = -1;
                 continue;
@@ -175,21 +187,33 @@ impl<'a> FfmpegProcessor<'a> {
                 self.video.input_index = i;
                 self.video.output_index = Some(output_index);
 
-                octx.add_stream(encoder::find_by_name(self.video_codec.as_ref().ok_or(Error::EncoderNotFound)?))?;
+                let codec = encoder::find_by_name(self.video_codec.as_ref().ok_or(Error::EncoderNotFound)?).ok_or(Error::EncoderNotFound)?;
+                unsafe {
+                    if !codec.as_ptr().is_null() {
+                        self.video.codec_supported_formats = super::ffmpeg_hw::pix_formats_to_vec((*codec.as_ptr()).pix_fmts);
+                        log::debug!("Codec formats: {:?}", self.video.codec_supported_formats);
+                    }
+                }
+                let mut out_stream = octx.add_stream(codec)?;
+                self.video.encoder_codec = Some(codec);
 
-                self.video.decoder = Some(stream.codec().decoder().video()?);
                 self.video.frame_rate = self.video.decoder.as_ref().unwrap().frame_rate();
                 self.video.time_base = Some(stream.rate().invert());
 
+                out_stream.set_rate(stream.rate());
+                if let Some(fr) = self.video.frame_rate {
+                    out_stream.set_avg_frame_rate(fr);
+                }
+
                 output_index += 1;
             } else if medium == media::Type::Audio && self.audio_codec != codec::Id::None {
-                if stream.codec().id() == self.audio_codec {
+                /*if stream.codec().id() == self.audio_codec {
                     // Direct stream copy
                     let mut ost = octx.add_stream(encoder::find(codec::Id::None))?;
                     ost.set_parameters(stream.parameters());
                     // We need to set codec_tag to 0 lest we run into incompatible codec tag issues when muxing into a different container format.
                     unsafe { (*ost.parameters().as_mut_ptr()).codec_tag = 0; }
-                } else {
+                } else */{
                     // Transcode audio
                     atranscoders.insert(i, AudioTranscoder::new(self.audio_codec, &stream, &mut octx, output_index as _)?);
                 }
@@ -216,6 +240,7 @@ impl<'a> FfmpegProcessor<'a> {
                 }
                 None => {
                     // Direct stream copy
+                    // TODO: Wrong pts, shifted by length of packet, would need to synchronize with first video frame pts
                     if copied_stream_first_pts.is_none() {
                         copied_stream_first_pts = packet.pts();
                         copied_stream_first_dts = packet.dts();
@@ -287,6 +312,7 @@ impl<'a> FfmpegProcessor<'a> {
         {
             let ost_time_base = self.ost_time_bases[self.video.output_index.unwrap_or_default()];
             self.video.decoder.as_mut().ok_or(Error::DecoderNotFound)?.send_eof()?;
+            // self.video.decoder.as_mut().ok_or(Error::DecoderNotFound)?.flush();
             self.video.receive_and_process_video_frames(output_size, bitrate, Some(&mut octx), &mut self.ost_time_bases, self.start_ms, self.end_ms)?;
             self.video.encoder.as_mut().ok_or(Error::EncoderNotFound)?.send_eof()?;
             self.video.receive_and_process_encoded_packets(&mut octx, ost_time_base)?;
@@ -294,12 +320,9 @@ impl<'a> FfmpegProcessor<'a> {
         if self.audio_codec != codec::Id::None {
             for (ost_index, transcoder) in atranscoders.iter_mut() {
                 let ost_time_base = self.ost_time_bases[*ost_index];
-                transcoder.decoder.send_eof()?;
-                transcoder.receive_and_process_decoded_frames(&mut octx, ost_time_base, self.start_ms)?;
-                transcoder.encoder.send_eof()?;
-                transcoder.receive_and_process_encoded_packets(&mut octx, ost_time_base)?;
+                transcoder.flush(&mut octx, ost_time_base, self.start_ms)?;
             }
-        }    
+        }
 
         octx.write_trailer()?;
 
@@ -321,16 +344,14 @@ impl<'a> FfmpegProcessor<'a> {
         self.video.decode_only = true;
 
         for (i, stream) in self.input_context.streams().enumerate() {
-            if stream.codec().medium() == media::Type::Video {
+            if stream.parameters().medium() == media::Type::Video {
                 self.video.input_index = i;
 
-                let codec = stream.codec().decoder();
                 // TODO this doesn't work for some reason
                 // let c_name = CString::new("resize").unwrap();
                 // let c_val = CString::new("1280x720").unwrap();
                 // unsafe { ffi::av_opt_set((*codec.as_mut_ptr()).priv_data, c_name.as_ptr(), c_val.as_ptr(), 1); } 
 
-                self.video.decoder = Some(codec.video()?);
                 self.video.frame_rate = self.video.decoder.as_ref().unwrap().frame_rate();
                 self.video.time_base = Some(stream.rate().invert());
                 break;
@@ -386,7 +407,7 @@ impl<'a> FfmpegProcessor<'a> {
         Ok(())
     }
 
-    pub fn on_frame<F>(&mut self, cb: F) where F: FnMut(i64, &mut frame::Video, Option<&mut frame::Video>, &mut ffmpeg_video::Converter) -> Result<(), FFmpegError> + 'a {
+    pub fn on_frame<F>(&mut self, cb: F) where F: FnMut(i64, &mut frame::Video, Option<&mut frame::Video>, &mut ffmpeg_video_converter::Converter) -> Result<(), FFmpegError> + 'a {
         self.video.on_frame_callback = Some(Box::new(cb));
     }
 }

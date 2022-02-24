@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::Result;
 use std::io::ErrorKind;
 
-pub fn get_video_metadata(filepath: &str) -> Result<(usize, usize, f64)> {
+pub fn get_video_metadata(filepath: &str) -> Result<(usize, usize, f64)> { // -> (width, height, fps)
     let mut stream = File::open(&filepath)?;
     let filesize = stream.metadata().unwrap().len() as usize;
     let mp = telemetry_parser::util::parse_mp4(&mut stream, filesize)?;
@@ -54,9 +54,8 @@ pub fn rename_calib_videos() {
                 let (w, h, fps) = util::get_video_metadata(&f_name).unwrap();
                 let mut stream = File::open(&f_name).unwrap();
                 let filesize = stream.metadata().unwrap().len() as usize;
-                let filename = std::path::Path::new(&f_name).file_name().unwrap().to_str().unwrap();
             
-                let input = Input::from_stream(&mut stream, filesize, filename).unwrap();
+                let input = Input::from_stream(&mut stream, filesize, &f_name).unwrap();
         
                 let camera_identifier = CameraIdentifier::from_telemetry_parser(&input, w as usize, h as usize, fps);
                 if let Ok(id) = camera_identifier {
