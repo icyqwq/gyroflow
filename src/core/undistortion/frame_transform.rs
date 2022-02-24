@@ -26,10 +26,10 @@ impl FrameTransform {
         //let focal_center = (params.video_width as f64 / 2.0, params.video_height as f64 / 2.0);
 
         let mut new_k = params.camera_matrix;
-        new_k[(0, 0)] = new_k[(0, 0)] * img_dim_ratio / fov;
-        new_k[(1, 1)] = new_k[(1, 1)] * img_dim_ratio / fov;
-        new_k[(0, 2)] = /*(params.video_width  as f64 / 2.0 - focal_center.0) * img_dim_ratio / fov + */out_dim.0 / 2.0;
-        new_k[(1, 2)] = /*(params.video_height as f64 / 2.0 - focal_center.1) * img_dim_ratio / fov + */out_dim.1 / 2.0;
+        new_k[(0, 0)] = new_k[(0, 0)] * img_dim_ratio / fov; // fx
+        new_k[(1, 1)] = new_k[(1, 1)] * img_dim_ratio / fov; // fy
+        new_k[(0, 2)] = /*(params.video_width  as f64 / 2.0 - focal_center.0) * img_dim_ratio / fov + */out_dim.0 / 2.0; // x0
+        new_k[(1, 2)] = /*(params.video_height as f64 / 2.0 - focal_center.1) * img_dim_ratio / fov + */out_dim.1 / 2.0; // y0
         new_k
     }
     fn get_ratio(params: &ComputeParams) -> f64 {
@@ -90,7 +90,8 @@ impl FrameTransform {
                 r[(1, 0)] *= -1.0; r[(2, 0)] *= -1.0;
             }
             
-            let i_r = (new_k * r).pseudo_inverse(0.000001);
+            // new_k -> P, r -> R, i_r -> iR
+            let i_r = (new_k * r).pseudo_inverse(0.000001);  // 501: cv::Matx33d iR = (PP * RR).inv(cv::DECOMP_SVD);
             if let Err(err) = i_r {
                 log::error!("Failed to multiply matrices: {:?} * {:?}: {}", new_k, r, err);
             }

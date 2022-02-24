@@ -59,7 +59,7 @@ impl<T: PixelType> Undistortion<T> {
                     let _x = y as f32 * undistortion_params[1] + undistortion_params[2] + (x as f32 * undistortion_params[0]);
                     let _y = y as f32 * undistortion_params[4] + undistortion_params[5] + (x as f32 * undistortion_params[3]);
                     let _w = y as f32 * undistortion_params[7] + undistortion_params[8] + (x as f32 * undistortion_params[6]);
-                
+
                     let pix_out = bytemuck::from_bytes_mut(pix_chunk); // treat this byte chunk as `T`
 
                     if _w > 0.0 {

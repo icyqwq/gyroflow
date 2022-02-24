@@ -190,6 +190,25 @@ impl GyroSource {
             4 => self.quaternions = GyroOnlyIntegrator::integrate(&self.raw_imu, self.duration_ms),
             _ => log::error!("Unknown integrator")
         }
+        // acflow debug
+        use std::io::prelude::*;
+        use std::fs::File;
+        let mut file;
+        match self.integration_method {
+            0 => file = File::create("C:\\Users\\tongy\\Documents\\GitHub\\gyroflow\\dumps\\NoneIntegrator.txt").unwrap(),
+            1 => file = File::create("C:\\Users\\tongy\\Documents\\GitHub\\gyroflow\\dumps\\ComplementaryIntegrator.txt").unwrap(),
+            2 => file = File::create("C:\\Users\\tongy\\Documents\\GitHub\\gyroflow\\dumps\\MadgwickIntegrator.txt").unwrap(),
+            3 => file = File::create("C:\\Users\\tongy\\Documents\\GitHub\\gyroflow\\dumps\\MahonyIntegrator.txt").unwrap(),
+            4 => file = File::create("C:\\Users\\tongy\\Documents\\GitHub\\gyroflow\\dumps\\GyroOnlyIntegrator.txt").unwrap(),
+            _ => file = File::create("C:\\Users\\tongy\\Documents\\GitHub\\gyroflow\\dumps\\Err.txt").unwrap()
+        }
+        writeln!(&mut file, "{}, {}", self.quaternions.len(), self.quaternions.len()).unwrap();
+        for (timestamp, quat) in self.quaternions.iter() {
+            writeln!(&mut file, "{}, {}, {}, {}", timestamp, quat.to_euler_angles().0, quat.to_euler_angles().1, quat.to_euler_angles().2).unwrap();
+        }
+        for (timestamp, quat) in self.quaternions.iter() {
+            writeln!(&mut file, "{}, {}, {}, {}", timestamp, quat.to_euler_angles().0, quat.to_euler_angles().1, quat.to_euler_angles().2).unwrap();
+        }
     }
 
     pub fn set_offset(&mut self, timestamp_us: i64, offset_ms: f64) {
@@ -209,6 +228,18 @@ impl GyroSource {
         for (sq, q) in self.smoothed_quaternions.iter_mut().zip(self.quaternions.iter()) {
             // rotation quaternion from smooth motion -> raw motion to counteract it
             *sq.1 = sq.1.inverse() * q.1;
+        }
+
+        // acflow debug
+        use std::fs::File;
+        use std::io::prelude::*;
+        let mut file2 = File::create("C:\\Users\\tongy\\Documents\\GitHub\\gyroflow\\dumps\\gyroflow_smoothed_rotated_euler.txt").unwrap();
+        writeln!(&mut file2, "{}, {}, {}", self.smoothed_quaternions.len(), 0, 0).unwrap();
+        for (timestamp, quat) in self.org_smoothed_quaternions.iter() {
+            writeln!(&mut file2, "{}, {}, {}, {}", timestamp, quat.euler_angles().0, quat.euler_angles().1, quat.euler_angles().2).unwrap();
+        }
+        for (timestamp, quat) in self.smoothed_quaternions.iter() {
+            writeln!(&mut file2, "{}, {}, {}, {}", timestamp, quat.euler_angles().0, quat.euler_angles().1, quat.euler_angles().2).unwrap();
         }
     }
 

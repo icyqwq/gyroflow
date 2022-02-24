@@ -65,6 +65,7 @@ impl SmoothingAlgorithm for VelocityDampened {
         hasher.finish()
     }
 
+
     fn smooth(&mut self, quats: &TimeQuat, duration: f64, _params: &crate::BasicParams) -> TimeQuat { // TODO Result<>?
         if quats.is_empty() || duration <= 0.0 { return quats.clone(); }
 
@@ -124,6 +125,52 @@ impl SmoothingAlgorithm for VelocityDampened {
             q = q.slerp(x, val.min(1.0));
             (*ts, q)
         }).collect();
+
+        // acflow debug
+        use nalgebra::{UnitQuaternion, Quaternion, Vector3};
+        use std::io::prelude::*;
+        use std::fs::File;
+        let axis = Unit::new_normalize(Vector3::new(0.5281989959211413, 0.5031314608611563, 0.6840062527489181));
+        // let axis = Unit::new_normalize(Vector3::new(1.0,2.0 , 3.0));
+        let q = UnitQuaternion::from_axis_angle(&axis, 1.623293931562064);
+        let qi = q.inverse();
+        ::log::debug!("{}, {}", q.to_string(), qi.to_string());
+        ::log::debug!("->>> {}, {}, {} \n {}, {}, {}", 
+            q.euler_angles().0, q.euler_angles().1, q.euler_angles().2, 
+            qi.euler_angles().0, qi.euler_angles().1, qi.euler_angles().2
+        );
+        ::log::debug!("{}, {}", q.to_rotation_matrix(), qi.to_rotation_matrix());
+        ::log::debug!("{}, {}, {}, {}, {}, {}", 
+            q.to_rotation_matrix().euler_angles().0, 
+            q.to_rotation_matrix().euler_angles().1, 
+            q.to_rotation_matrix().euler_angles().2, 
+            qi.to_rotation_matrix().euler_angles().0,
+            qi.to_rotation_matrix().euler_angles().1,
+            qi.to_rotation_matrix().euler_angles().2,
+        );
+        ::log::debug!("{}, {}, {}, {}", q.w, q.i, q.j, q.k);
+        ::log::debug!("{}, {}, {}, {}", qi.w, qi.i, qi.j, qi.k);
+
+
+        // ::log::debug!("{}, {}, {}, {}", q.to_string(), q.euler_angles().0, q.euler_angles().1, q.euler_angles().2); // roll pitch yaw
+        ::log::debug!("{}, {}, {}", sample_rate, quats.len(), duration);
+        
+        let mut file = File::create("C:\\Users\\tongy\\Documents\\GitHub\\gyroflow\\dumps\\gyroflow_smooth_quat.txt").unwrap();
+        writeln!(&mut file, "{}, {}, {}", quats.len(), sample_rate, duration).unwrap();
+        for (timestamp, quat) in quats.iter() {
+            writeln!(&mut file, "{}, {}", timestamp, quat.to_string()).unwrap();
+        }
+        for (timestamp, quat) in smoothed2.iter() {
+            writeln!(&mut file, "{}, {}", timestamp, quat.to_string()).unwrap();
+        }
+        let mut file2 = File::create("C:\\Users\\tongy\\Documents\\GitHub\\gyroflow\\dumps\\gyroflow_smooth_euler.txt").unwrap();
+        writeln!(&mut file2, "{}, {}, {}", quats.len(), sample_rate, duration).unwrap();
+        for (timestamp, quat) in quats.iter() {
+            writeln!(&mut file2, "{}, {}, {}, {}", timestamp, quat.euler_angles().0, quat.euler_angles().1, quat.euler_angles().2).unwrap();
+        }
+        for (timestamp, quat) in smoothed2.iter() {
+            writeln!(&mut file2, "{}, {}, {}, {}", timestamp, quat.euler_angles().0, quat.euler_angles().1, quat.euler_angles().2).unwrap();
+        }
 
         // Level horizon
         const DEG2RAD: f64 = std::f64::consts::PI / 180.0;
