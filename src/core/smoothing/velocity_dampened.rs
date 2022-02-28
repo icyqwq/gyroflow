@@ -130,30 +130,31 @@ impl SmoothingAlgorithm for VelocityDampened {
         use nalgebra::{UnitQuaternion, Quaternion, Vector3};
         use std::io::prelude::*;
         use std::fs::File;
-        let axis = Unit::new_normalize(Vector3::new(0.5281989959211413, 0.5031314608611563, 0.6840062527489181));
-        // let axis = Unit::new_normalize(Vector3::new(1.0,2.0 , 3.0));
-        let q = UnitQuaternion::from_axis_angle(&axis, 1.623293931562064);
-        let qi = q.inverse();
-        ::log::debug!("{}, {}", q.to_string(), qi.to_string());
-        ::log::debug!("->>> {}, {}, {} \n {}, {}, {}", 
-            q.euler_angles().0, q.euler_angles().1, q.euler_angles().2, 
-            qi.euler_angles().0, qi.euler_angles().1, qi.euler_angles().2
-        );
-        ::log::debug!("{}, {}", q.to_rotation_matrix(), qi.to_rotation_matrix());
-        ::log::debug!("{}, {}, {}, {}, {}, {}", 
-            q.to_rotation_matrix().euler_angles().0, 
-            q.to_rotation_matrix().euler_angles().1, 
-            q.to_rotation_matrix().euler_angles().2, 
-            qi.to_rotation_matrix().euler_angles().0,
-            qi.to_rotation_matrix().euler_angles().1,
-            qi.to_rotation_matrix().euler_angles().2,
-        );
-        ::log::debug!("{}, {}, {}, {}", q.w, q.i, q.j, q.k);
-        ::log::debug!("{}, {}, {}, {}", qi.w, qi.i, qi.j, qi.k);
+        ::log::debug!("self.smoothness = {}", self.smoothness);
+        // let axis = Unit::new_normalize(Vector3::new(0.5281989959211413, 0.5031314608611563, 0.6840062527489181));
+        // // let axis = Unit::new_normalize(Vector3::new(1.0,2.0 , 3.0));
+        // let q = UnitQuaternion::from_axis_angle(&axis, 1.623293931562064);
+        // let qi = q.inverse();
+        // ::log::debug!("{}, {}", q.to_string(), qi.to_string());
+        // ::log::debug!("->>> {}, {}, {} \n {}, {}, {}", 
+        //     q.euler_angles().0, q.euler_angles().1, q.euler_angles().2, 
+        //     qi.euler_angles().0, qi.euler_angles().1, qi.euler_angles().2
+        // );
+        // ::log::debug!("{}, {}", q.to_rotation_matrix(), qi.to_rotation_matrix());
+        // ::log::debug!("{}, {}, {}, {}, {}, {}", 
+        //     q.to_rotation_matrix().euler_angles().0, 
+        //     q.to_rotation_matrix().euler_angles().1, 
+        //     q.to_rotation_matrix().euler_angles().2, 
+        //     qi.to_rotation_matrix().euler_angles().0,
+        //     qi.to_rotation_matrix().euler_angles().1,
+        //     qi.to_rotation_matrix().euler_angles().2,
+        // );
+        // ::log::debug!("{}, {}, {}, {}", q.w, q.i, q.j, q.k);
+        // ::log::debug!("{}, {}, {}, {}", qi.w, qi.i, qi.j, qi.k);
 
 
-        // ::log::debug!("{}, {}, {}, {}", q.to_string(), q.euler_angles().0, q.euler_angles().1, q.euler_angles().2); // roll pitch yaw
-        ::log::debug!("{}, {}, {}", sample_rate, quats.len(), duration);
+        // // ::log::debug!("{}, {}, {}, {}", q.to_string(), q.euler_angles().0, q.euler_angles().1, q.euler_angles().2); // roll pitch yaw
+        // ::log::debug!("{}, {}, {}", sample_rate, quats.len(), duration);
         
         let mut file = File::create("C:\\Users\\tongy\\Documents\\GitHub\\gyroflow\\dumps\\gyroflow_smooth_quat.txt").unwrap();
         writeln!(&mut file, "{}, {}, {}", quats.len(), sample_rate, duration).unwrap();

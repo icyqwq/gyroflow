@@ -157,6 +157,8 @@ impl SmoothingAlgorithm for VelocityDampenedAdvanced {
             (*ts, q)
         }).collect();
 
+        ::log::debug!("self.horizonlock.horizonlockpercent = {}, self.horizonlock.horizonroll = {}", self.horizonlock.horizonlockpercent, self.horizonlock.horizonroll);
+
         self.horizonlock.lock(&smoothed2)
     }
 }
